@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  IMAGE: ${{ vars.GCP_ARTIFACT_REGISTRY }}/svc-core
+
+jobs:
+  # Required check (DI-005). Usa el binario de gitleaks directo, no la
+  # GitHub Action oficial (gitleaks/gitleaks-action): esa exige licencia
+  # de pago a partir del segundo repositorio de una organización.
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+
+      - name: Escanear historial
+        run: ./gitleaks detect --source . --no-banner -v
+
+  # Required check (DI-006). Lint + formato (Ruff) + pruebas con cobertura.
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -e ".[dev]"
+
+      - name: Ruff — lint
+        run: ruff check .
+
+      - name: Ruff — formato
+        run: ruff format --check .
+
+      - name: Pruebas + cobertura (gate 80%)
+        run: pytest --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Subir reporte de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 1
+
+  # Required check (DI-005/006). Espera el quality gate de SonarQube Cloud.
+  sonar:
+    name: sonar
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Descargar reporte de cobertura
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-xml
+
+      - name: SonarQube Cloud Scan
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # No corre en pull_request (DI-006 4.6) — solo al hacer push a main/develop
+  # o al taguear una versión semver.
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    needs: [quality, sonar]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      id-token: write # requerido por google-github-actions/auth (WIF, DI-004)
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Autenticar contra GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Configurar Docker para Artifact Registry
+        run: gcloud auth configure-docker "${IMAGE%%/*}" --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Calcular tags de la imagen (DI-006 4.5)
+        id: tags
+        run: |
+          sha_short=$(git rev-parse --short=7 HEAD)
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE}:sha-${sha_short}"
+            if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+              echo "${IMAGE}:main"
+            elif [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+              echo "${IMAGE}:develop"
+            elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+              echo "${IMAGE}:${GITHUB_REF_NAME#v}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build y push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
