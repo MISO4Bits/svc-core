@@ -1,0 +1,372 @@
+openapi: 3.2.0
+
+info:
+  title: ICustomerIdentity — CoreTransaccional
+  summary: Identidad y consentimiento de clientes de Solventa.
+  description: |
+    API **interna** del submódulo *Identidad y Consentimiento* de CoreTransaccional.
+
+    Responsabilidades:
+    - Alta y consulta de clientes, enlazados con su identidad de autenticación (`identityRef`).
+    - Gestión de consentimientos de acceso a datos por *scope* (Open Finance / Open Data).
+
+    Consumidores:
+    - **BFF Web / Móvil** — registro y pasos del journey de originación.
+    - **Perfilamiento** — valida el consentimiento vigente antes de construir el perfil (EXP-02).
+
+    No es una API pública. Se expone solo dentro de la malla del clúster; el borde
+    (LB → WAF → API Gateway) no la enruta hacia Internet.
+
+    Errores en formato **RFC 9457 (Problem Details)**, `application/problem+json`.
+  version: 0.1.0
+  contact:
+    name: Equipo 4Bits
+  license:
+    name: Uso académico MISW4501
+
+servers:
+  - url: http://svc-core.core.svc.cluster.local
+    description: Servicio interno (in-cluster)
+  - url: https://core.dev.solventa4bits.com
+    description: Entorno de desarrollo (a través del gateway interno)
+
+tags:
+  - name: Clientes
+    description: Alta y consulta de clientes.
+  - name: Consentimientos
+    description: Otorgamiento, consulta y revocación de consentimientos por scope.
+
+security:
+  - serviceAuth: []
+
+paths:
+  /clientes:
+    get:
+      operationId: buscarClientePorIdentidad
+      tags: [Clientes]
+      summary: Busca un cliente por su identidad de autenticación
+      description: |
+        Resuelve `identityRef` (el `sub` de Identity Platform) al cliente.
+        Lo usa el BFF para asociar la sesión con el `clienteId` tras el login.
+      parameters:
+        - name: identityRef
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Cliente encontrado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cliente' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    post:
+      operationId: registrarCliente
+      tags: [Clientes]
+      summary: Registra un cliente
+      description: |
+        Crea el registro de cliente en estado `ACTIVO` y lo enlaza con la identidad
+        de autenticación (`identityRef`).
+
+        Idempotente por (`tipoDocumento`, `numeroDocumento`): si el cliente ya existe
+        responde `409` sin modificar nada. Con `Idempotency-Key`, un reintento con la
+        misma clave devuelve la respuesta original `201`.
+
+        Publica el evento de dominio `ClienteRegistrado`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegistrarClienteRequest' }
+      responses:
+        '201':
+          description: Cliente creado.
+          headers:
+            Location:
+              description: URI del cliente creado.
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cliente' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/EntidadNoProcesable' }
+
+  /clientes/{clienteId}:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+    get:
+      operationId: obtenerCliente
+      tags: [Clientes]
+      summary: Consulta un cliente por id
+      responses:
+        '200':
+          description: Cliente encontrado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cliente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /clientes/{clienteId}/consentimientos:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+    get:
+      operationId: listarConsentimientos
+      tags: [Consentimientos]
+      summary: Lista los consentimientos del cliente
+      responses:
+        '200':
+          description: Consentimientos del cliente (uno por scope registrado).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Consentimiento' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    post:
+      operationId: otorgarConsentimiento
+      tags: [Consentimientos]
+      summary: Otorga o renueva un consentimiento
+      description: |
+        Registra el otorgamiento de un consentimiento para un scope. Si ya existía
+        `OTORGADO`, incrementa `version` y actualiza la marca temporal.
+
+        Publica el evento `ConsentimientoOtorgado`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OtorgarConsentimientoRequest' }
+      responses:
+        '201':
+          description: Consentimiento otorgado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consentimiento' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /clientes/{clienteId}/consentimientos/{scope}:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+      - $ref: '#/components/parameters/Scope'
+    get:
+      operationId: obtenerConsentimiento
+      tags: [Consentimientos]
+      summary: Consulta un consentimiento por scope
+      responses:
+        '200':
+          description: Consentimiento.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consentimiento' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    delete:
+      operationId: revocarConsentimiento
+      tags: [Consentimientos]
+      summary: Revoca un consentimiento
+      description: |
+        Marca el consentimiento como `REVOCADO` y publica `ConsentimientoRevocado`.
+
+        La propagación a los consumidores (p. ej. expiración de caché en Perfilamiento)
+        es asíncrona y debe completarse en ≤ 5 min (NFR de revocación).
+      responses:
+        '204':
+          description: Consentimiento revocado.
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /clientes/{clienteId}/consentimientos/{scope}/estado:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+      - $ref: '#/components/parameters/Scope'
+    get:
+      operationId: obtenerEstadoConsentimiento
+      tags: [Consentimientos]
+      summary: Estado efectivo de un consentimiento (consulta rápida)
+      description: |
+        Respuesta reducida que consume **Perfilamiento** antes de perfilar.
+        Optimizada para latencia: solo estado efectivo, versión y vigencia.
+      responses:
+        '200':
+          description: Estado del consentimiento.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoConsentimiento' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+components:
+
+  securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token de identidad de servicio emitido por la malla / gateway interno.
+        No se aceptan tokens de cliente final directamente contra esta API.
+
+  parameters:
+    ClienteId:
+      name: clienteId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Scope:
+      name: scope
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ConsentimientoScope' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Clave de idempotencia para reintentos seguros del alta.
+      schema: { type: string, maxLength: 64 }
+
+  responses:
+    SolicitudInvalida:
+      description: Solicitud mal formada o con validación de esquema fallida.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problema' }
+    NoEncontrado:
+      description: El recurso no existe.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problema' }
+    Conflicto:
+      description: El cliente ya existe para ese documento.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problema' }
+    EntidadNoProcesable:
+      description: La solicitud es válida pero incumple una regla de negocio.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problema' }
+
+  schemas:
+
+    RegistrarClienteRequest:
+      type: object
+      additionalProperties: false
+      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email]
+      properties:
+        identityRef:
+          type: string
+          maxLength: 128
+          description: Identificador de la identidad de autenticación (`sub` de Identity Platform).
+        tipoDocumento: { $ref: '#/components/schemas/TipoDocumento' }
+        numeroDocumento:
+          type: string
+          minLength: 4
+          maxLength: 20
+          pattern: '^[0-9A-Za-z-]+$'
+        primerNombre: { type: string, minLength: 1, maxLength: 60 }
+        segundoNombre:
+          type: [string, 'null']
+          maxLength: 60
+        primerApellido: { type: string, minLength: 1, maxLength: 60 }
+        segundoApellido:
+          type: [string, 'null']
+          maxLength: 60
+        fechaNacimiento: { type: string, format: date }
+        email: { type: string, format: email, maxLength: 254 }
+        telefono:
+          type: [string, 'null']
+          pattern: '^\+?[0-9]{7,15}$'
+
+    Cliente:
+      type: object
+      additionalProperties: false
+      required: [id, identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, estado, creadoEn]
+      properties:
+        id: { type: string, format: uuid }
+        identityRef: { type: string }
+        tipoDocumento: { $ref: '#/components/schemas/TipoDocumento' }
+        numeroDocumento: { type: string }
+        primerNombre: { type: string }
+        segundoNombre: { type: [string, 'null'] }
+        primerApellido: { type: string }
+        segundoApellido: { type: [string, 'null'] }
+        fechaNacimiento: { type: string, format: date }
+        email: { type: string, format: email }
+        telefono: { type: [string, 'null'] }
+        estado: { $ref: '#/components/schemas/EstadoCliente' }
+        creadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: [string, 'null'], format: date-time }
+
+    OtorgarConsentimientoRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, politicaVersion, canal]
+      properties:
+        scope: { $ref: '#/components/schemas/ConsentimientoScope' }
+        politicaVersion:
+          type: string
+          maxLength: 20
+          description: Versión del texto de política/consentimiento aceptado por el cliente.
+        canal: { $ref: '#/components/schemas/Canal' }
+
+    Consentimiento:
+      type: object
+      additionalProperties: false
+      required: [scope, estado, version, actualizadoEn]
+      properties:
+        scope: { $ref: '#/components/schemas/ConsentimientoScope' }
+        estado: { $ref: '#/components/schemas/EstadoConsentimientoEnum' }
+        version: { type: integer, minimum: 1 }
+        politicaVersion: { type: [string, 'null'] }
+        canal: { $ref: '#/components/schemas/Canal' }
+        otorgadoEn: { type: [string, 'null'], format: date-time }
+        revocadoEn: { type: [string, 'null'], format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+
+    EstadoConsentimiento:
+      type: object
+      additionalProperties: false
+      required: [scope, estado, version, vigente]
+      properties:
+        scope: { $ref: '#/components/schemas/ConsentimientoScope' }
+        estado: { $ref: '#/components/schemas/EstadoConsentimientoEnum' }
+        version: { type: integer, minimum: 1 }
+        vigente:
+          type: boolean
+          description: true si el estado efectivo habilita el acceso a datos de ese scope.
+
+    TipoDocumento:
+      type: string
+      enum: [CC, CE, PA, NIT]
+    EstadoCliente:
+      type: string
+      enum: [ACTIVO, BLOQUEADO, INACTIVO]
+    ConsentimientoScope:
+      type: string
+      enum: [OPEN_FINANCE, OPEN_DATA]
+    EstadoConsentimientoEnum:
+      type: string
+      enum: [OTORGADO, REVOCADO, NO_OTORGADO]
+    Canal:
+      type: string
+      enum: [WEB, MOVIL, BACKOFFICE]
+
+    Problema:
+      description: Error en formato RFC 9457 (Problem Details for HTTP APIs).
+      type: object
+      properties:
+        type: { type: string, format: uri, default: 'about:blank' }
+        title: { type: string }
+        status: { type: integer, minimum: 100, maximum: 599 }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        errores:
+          type: array
+          description: Detalle por campo cuando aplica (validación).
+          items:
+            type: object
+            properties:
+              campo: { type: string }
+              mensaje: { type: string }
