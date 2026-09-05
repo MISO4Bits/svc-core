@@ -83,9 +83,7 @@ async def test_respuestas_cumplen_el_esquema(client, openapi_spec):
     assert otorgado.status_code == 201
     _assert_valid(openapi_spec, "Consentimiento", otorgado.json())
 
-    estado = await client.get(
-        f"/clientes/{cliente_id}/consentimientos/OPEN_FINANCE/estado"
-    )
+    estado = await client.get(f"/clientes/{cliente_id}/consentimientos/OPEN_FINANCE/estado")
     assert estado.status_code == 200
     _assert_valid(openapi_spec, "EstadoConsentimiento", estado.json())
 

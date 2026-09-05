@@ -128,9 +128,7 @@ class IdentityService:
         )
         return guardado
 
-    async def revocar_consentimiento(
-        self, cliente_id: str, scope: ConsentimientoScope
-    ) -> None:
+    async def revocar_consentimiento(self, cliente_id: str, scope: ConsentimientoScope) -> None:
         consentimiento = await self.obtener_consentimiento(cliente_id, scope)
         consentimiento.estado = EstadoConsentimiento.REVOCADO
         consentimiento.revocado_en = now_utc()

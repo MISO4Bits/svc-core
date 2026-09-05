@@ -96,9 +96,7 @@ async def obtener_cliente(cliente_id: str, service: ServiceDep) -> ClienteOut:
     response_model=list[ConsentimientoOut],
     tags=["Consentimientos"],
 )
-async def listar_consentimientos(
-    cliente_id: str, service: ServiceDep
-) -> list[ConsentimientoOut]:
+async def listar_consentimientos(cliente_id: str, service: ServiceDep) -> list[ConsentimientoOut]:
     items = await service.listar_consentimientos(cliente_id)
     return [ConsentimientoOut.model_validate(c) for c in items]
 

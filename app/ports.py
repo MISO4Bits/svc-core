@@ -15,9 +15,7 @@ class ClienteRepository(Protocol):
 
     async def obtener_por_identity_ref(self, identity_ref: str) -> Cliente | None: ...
 
-    async def existe_por_documento(
-        self, tipo_documento: str, numero_documento: str
-    ) -> bool: ...
+    async def existe_por_documento(self, tipo_documento: str, numero_documento: str) -> bool: ...
 
 
 @runtime_checkable

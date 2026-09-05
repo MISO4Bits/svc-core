@@ -38,9 +38,7 @@ def events() -> InMemoryEventPublisher:
 
 @pytest.fixture
 def service(events: InMemoryEventPublisher) -> IdentityService:
-    return IdentityService(
-        InMemoryClienteRepository(), InMemoryConsentimientoRepository(), events
-    )
+    return IdentityService(InMemoryClienteRepository(), InMemoryConsentimientoRepository(), events)
 
 
 async def test_registrar_cliente_publica_evento(service, events):
@@ -128,9 +126,7 @@ async def test_revocar_consentimiento(service, events):
 
     await service.revocar_consentimiento(cliente.id, ConsentimientoScope.OPEN_DATA)
 
-    consentimiento = await service.obtener_consentimiento(
-        cliente.id, ConsentimientoScope.OPEN_DATA
-    )
+    consentimiento = await service.obtener_consentimiento(cliente.id, ConsentimientoScope.OPEN_DATA)
     assert consentimiento.estado is EstadoConsentimiento.REVOCADO
     assert consentimiento.vigente is False
     assert consentimiento.revocado_en is not None
@@ -151,7 +147,5 @@ async def test_estado_consentimiento_delega_en_obtener(service):
         politica_version="v1",
         canal=Canal.WEB,
     )
-    estado = await service.estado_consentimiento(
-        cliente.id, ConsentimientoScope.OPEN_FINANCE
-    )
+    estado = await service.estado_consentimiento(cliente.id, ConsentimientoScope.OPEN_FINANCE)
     assert estado.vigente is True

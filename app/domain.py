@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def new_id() -> str:

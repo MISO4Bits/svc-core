@@ -156,16 +156,12 @@ class SqliteClienteRepository:
                 )
                 await conn.commit()
             except aiosqlite.IntegrityError as exc:
-                raise ClienteYaExiste(
-                    cliente.tipo_documento, cliente.numero_documento
-                ) from exc
+                raise ClienteYaExiste(cliente.tipo_documento, cliente.numero_documento) from exc
         return cliente
 
     async def obtener(self, cliente_id: str) -> Cliente | None:
         async with self._db.connect() as conn:
-            cursor = await conn.execute(
-                "SELECT * FROM clientes WHERE id = ?", (cliente_id,)
-            )
+            cursor = await conn.execute("SELECT * FROM clientes WHERE id = ?", (cliente_id,))
             row = await cursor.fetchone()
         return _row_to_cliente(row) if row else None
 
@@ -177,9 +173,7 @@ class SqliteClienteRepository:
             row = await cursor.fetchone()
         return _row_to_cliente(row) if row else None
 
-    async def existe_por_documento(
-        self, tipo_documento: str, numero_documento: str
-    ) -> bool:
+    async def existe_por_documento(self, tipo_documento: str, numero_documento: str) -> bool:
         async with self._db.connect() as conn:
             cursor = await conn.execute(
                 "SELECT 1 FROM clientes WHERE tipo_documento = ? AND numero_documento = ?",
@@ -201,9 +195,7 @@ class SqliteConsentimientoRepository:
             rows = await cursor.fetchall()
         return [_row_to_consentimiento(r) for r in rows]
 
-    async def obtener(
-        self, cliente_id: str, scope: ConsentimientoScope
-    ) -> Consentimiento | None:
+    async def obtener(self, cliente_id: str, scope: ConsentimientoScope) -> Consentimiento | None:
         async with self._db.connect() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM consentimientos WHERE cliente_id = ? AND scope = ?",
@@ -251,9 +243,7 @@ class SqliteIdempotencyStore:
 
     async def get(self, key: str) -> dict | None:
         async with self._db.connect() as conn:
-            cursor = await conn.execute(
-                "SELECT valor FROM idempotencia WHERE clave = ?", (key,)
-            )
+            cursor = await conn.execute("SELECT valor FROM idempotencia WHERE clave = ?", (key,))
             row = await cursor.fetchone()
         return json.loads(row["valor"]) if row else None
 

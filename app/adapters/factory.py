@@ -49,9 +49,7 @@ def build_event_publisher(settings: Settings) -> EventPublisher:
     if settings.event_backend == "pubsub":  # pragma: no cover
         from app.adapters.pubsub import PubSubEventPublisher
 
-        return PubSubEventPublisher(
-            settings.pubsub_project_id or "", settings.pubsub_topic
-        )
+        return PubSubEventPublisher(settings.pubsub_project_id or "", settings.pubsub_topic)
     return LoggingEventPublisher()
 
 

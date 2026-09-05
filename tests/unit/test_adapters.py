@@ -63,9 +63,7 @@ async def test_memory_consentimiento_repository_listar_ordenado():
     repo = InMemoryConsentimientoRepository()
     for scope in (ConsentimientoScope.OPEN_FINANCE, ConsentimientoScope.OPEN_DATA):
         await repo.guardar(
-            Consentimiento(
-                cliente_id="c1", scope=scope, estado=EstadoConsentimiento.OTORGADO
-            )
+            Consentimiento(cliente_id="c1", scope=scope, estado=EstadoConsentimiento.OTORGADO)
         )
     await repo.guardar(
         Consentimiento(
@@ -180,9 +178,7 @@ def test_build_event_publisher_variantes():
     assert isinstance(
         build_event_publisher(Settings(event_backend="logging")), LoggingEventPublisher
     )
-    assert isinstance(
-        build_event_publisher(Settings(event_backend="otro")), LoggingEventPublisher
-    )
+    assert isinstance(build_event_publisher(Settings(event_backend="otro")), LoggingEventPublisher)
 
 
 async def test_maybe_init_ignora_no_sqlite():

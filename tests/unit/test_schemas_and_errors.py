@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from fastapi import FastAPI
@@ -60,7 +60,7 @@ def test_cliente_out_serializa_en_camel_case():
         primer_apellido="Ríos",
         fecha_nacimiento=date(1990, 1, 1),
         email="ana@example.com",
-        creado_en=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        creado_en=datetime(2026, 1, 1, tzinfo=UTC),
     )
     data = ClienteOut.model_validate(dominio).model_dump(mode="json", by_alias=True)
     assert data["identityRef"] == "sub-1"

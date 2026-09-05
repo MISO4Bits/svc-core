@@ -37,17 +37,11 @@ def problema(
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ClienteYaExiste)
     async def _ya_existe(request: Request, exc: ClienteYaExiste) -> JSONResponse:
-        return problema(
-            409, "El cliente ya existe", detail=str(exc), instance=str(request.url)
-        )
+        return problema(409, "El cliente ya existe", detail=str(exc), instance=str(request.url))
 
     @app.exception_handler(ClienteNoEncontrado)
-    async def _cliente_no_encontrado(
-        request: Request, exc: ClienteNoEncontrado
-    ) -> JSONResponse:
-        return problema(
-            404, "Cliente no encontrado", detail=str(exc), instance=str(request.url)
-        )
+    async def _cliente_no_encontrado(request: Request, exc: ClienteNoEncontrado) -> JSONResponse:
+        return problema(404, "Cliente no encontrado", detail=str(exc), instance=str(request.url))
 
     @app.exception_handler(ConsentimientoNoEncontrado)
     async def _consentimiento_no_encontrado(
@@ -70,9 +64,7 @@ def install_error_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(RequestValidationError)
-    async def _validacion(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
+    async def _validacion(request: Request, exc: RequestValidationError) -> JSONResponse:
         errores = [
             {"campo": ".".join(str(p) for p in err["loc"]), "mensaje": err["msg"]}
             for err in exc.errors()

@@ -19,13 +19,9 @@ class InMemoryClienteRepository:
         return self._by_id.get(cliente_id)
 
     async def obtener_por_identity_ref(self, identity_ref: str) -> Cliente | None:
-        return next(
-            (c for c in self._by_id.values() if c.identity_ref == identity_ref), None
-        )
+        return next((c for c in self._by_id.values() if c.identity_ref == identity_ref), None)
 
-    async def existe_por_documento(
-        self, tipo_documento: str, numero_documento: str
-    ) -> bool:
+    async def existe_por_documento(self, tipo_documento: str, numero_documento: str) -> bool:
         return (str(tipo_documento), numero_documento) in self._docs
 
 
@@ -39,9 +35,7 @@ class InMemoryConsentimientoRepository:
             key=lambda c: str(c.scope),
         )
 
-    async def obtener(
-        self, cliente_id: str, scope: ConsentimientoScope
-    ) -> Consentimiento | None:
+    async def obtener(self, cliente_id: str, scope: ConsentimientoScope) -> Consentimiento | None:
         return self._items.get((cliente_id, str(scope)))
 
     async def guardar(self, consentimiento: Consentimiento) -> Consentimiento:
