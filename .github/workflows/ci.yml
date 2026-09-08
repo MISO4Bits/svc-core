@@ -29,7 +29,7 @@ jobs:
           tar -xzf gitleaks.tar.gz gitleaks
 
       - name: Escanear historial
-        run: ./gitleaks detect --source . --no-banner -v
+        run: ./gitleaks detect --source . --no-banner -v --config .gitleaks.toml
 
   # Required check (DI-006). Lint + formato (Ruff) + pruebas con cobertura.
   quality:

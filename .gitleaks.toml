@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Identificadores públicos conocidos, no secretos (ej. clave de proyecto de SonarQube Cloud)"
+regexes = [
+  '''^MISO4Bits_[\w-]+$''',
+]
