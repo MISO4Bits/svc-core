@@ -6,6 +6,9 @@ on:
     tags: ["v*.*.*"]
   pull_request:
     branches: [main, develop]
+  # Disparo manual (BITS-210): permite reconstruir y publicar la imagen de
+  # una rama o tag concreta desde la pestaña Actions sin necesidad de un push.
+  workflow_dispatch:
 
 env:
   IMAGE: ${{ vars.GCP_ARTIFACT_REGISTRY }}/svc-core
