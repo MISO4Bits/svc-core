@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SQLite local del servicio
+*.db
+svc_core.db
+
+# --- Credenciales y secretos (nunca versionar) ---
+*.pem
+*.p12
+*.key
+*-key.json
+*_key.json
+credentials.json
+sa-*.json
+gha-creds-*.json
+.env.*
+!.env.example
