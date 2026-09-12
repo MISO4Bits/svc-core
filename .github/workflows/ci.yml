@@ -21,7 +21,7 @@ jobs:
     name: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -39,9 +39,9 @@ jobs:
     name: quality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -58,7 +58,7 @@ jobs:
         run: pytest --cov=app --cov-report=xml --cov-report=term-missing
 
       - name: Subir reporte de cobertura
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
@@ -70,12 +70,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: quality
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Descargar reporte de cobertura
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-xml
 
@@ -94,12 +94,14 @@ jobs:
     permissions:
       contents: read
       id-token: write # requerido por google-github-actions/auth (WIF, DI-004)
+    outputs:
+      sha_short: ${{ steps.tags.outputs.sha_short }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: auth
         name: Autenticar contra GCP (Workload Identity Federation)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
@@ -107,12 +109,13 @@ jobs:
       - name: Configurar Docker para Artifact Registry
         run: gcloud auth configure-docker "${IMAGE%%/*}" --quiet
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Calcular tags de la imagen (DI-006 4.5)
         id: tags
         run: |
           sha_short=$(git rev-parse --short=7 HEAD)
+          echo "sha_short=${sha_short}" >> "$GITHUB_OUTPUT"
           {
             echo "tags<<EOF"
             echo "${IMAGE}:sha-${sha_short}"
@@ -127,8 +130,67 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build y push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+
+  # Write-back de GitOps (DI-007, 5.2): fija el tag inmutable (sha-<corto>)
+  # de esta build en apps/svc-core/overlays/dev del repo `deploy`, para que
+  # Argo CD vea un cambio real de texto y dispare el rollout (auto-sync,
+  # DI-007 5.6). Solo desde develop por ahora — overlays/prod no existe
+  # todavía; cuando exista, ese camino va por PR + 2 revisiones (DI-007,
+  # 5.7), no por commit directo como este.
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    needs: image
+    if: github.ref == 'refs/heads/develop'
+    permissions:
+      contents: read
+    steps:
+      - name: Generar token de instalación de la GitHub App (DI-007, 5.3)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          # "app-id" sale como deprecado en el mensaje de la acción a favor
+          # de "client-id", pero ese input todavía no existe en ningún tag
+          # publicado (v3 incluido, confirmado con actionlint) — dejarlo así
+          # hasta que la acción libere una versión que sí lo soporte.
+          app-id: ${{ vars.DEPLOY_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOY_GITHUB_APP_PRIVATE_KEY }}
+          owner: MISO4Bits
+          repositories: deploy
+
+      - name: Clonar deploy
+        uses: actions/checkout@v7
+        with:
+          repository: MISO4Bits/deploy
+          token: ${{ steps.app-token.outputs.token }}
+          path: deploy
+
+      - name: Instalar kustomize
+        run: |
+          curl -sSfL -o kustomize.tar.gz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          tar -xzf kustomize.tar.gz kustomize
+          sudo mv kustomize /usr/local/bin/kustomize
+
+      - name: Fijar el tag en apps/svc-core/overlays/dev
+        working-directory: deploy/apps/svc-core/overlays/dev
+        run: kustomize edit set image "${IMAGE}=${IMAGE}:sha-${{ needs.image.outputs.sha_short }}"
+
+      - name: Commitear y pushear a deploy
+        working-directory: deploy
+        run: |
+          git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+          git config user.email "${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          git add apps/svc-core/overlays/dev/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Sin cambios de imagen, nada que commitear."
+            exit 0
+          fi
+          git commit -m "svc-core: desplegar sha-${{ needs.image.outputs.sha_short }} en dev"
+          git pull --rebase origin main
+          git push origin HEAD:main

@@ -29,10 +29,11 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
+RUN chown app:app /app
 
 COPY --from=build /opt/venv /opt/venv
-COPY app ./app
-COPY openapi ./openapi
+COPY --chown=app:app app ./app
+COPY --chown=app:app openapi ./openapi
 
 USER app
 EXPOSE 8080
