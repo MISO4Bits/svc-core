@@ -94,6 +94,8 @@ jobs:
     permissions:
       contents: read
       id-token: write # requerido por google-github-actions/auth (WIF, DI-004)
+    outputs:
+      sha_short: ${{ steps.tags.outputs.sha_short }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,6 +115,7 @@ jobs:
         id: tags
         run: |
           sha_short=$(git rev-parse --short=7 HEAD)
+          echo "sha_short=${sha_short}" >> "$GITHUB_OUTPUT"
           {
             echo "tags<<EOF"
             echo "${IMAGE}:sha-${sha_short}"
@@ -132,3 +135,58 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+
+  # Write-back de GitOps (DI-007, 5.2): fija el tag inmutable (sha-<corto>)
+  # de esta build en apps/svc-core/overlays/dev del repo `deploy`, para que
+  # Argo CD vea un cambio real de texto y dispare el rollout (auto-sync,
+  # DI-007 5.6). Solo desde develop por ahora — overlays/prod no existe
+  # todavía; cuando exista, ese camino va por PR + 2 revisiones (DI-007,
+  # 5.7), no por commit directo como este.
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    needs: image
+    if: github.ref == 'refs/heads/develop'
+    permissions:
+      contents: read
+    steps:
+      - name: Generar token de instalación de la GitHub App (DI-007, 5.3)
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.DEPLOY_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOY_GITHUB_APP_PRIVATE_KEY }}
+          owner: MISO4Bits
+          repositories: deploy
+
+      - name: Clonar deploy
+        uses: actions/checkout@v4
+        with:
+          repository: MISO4Bits/deploy
+          token: ${{ steps.app-token.outputs.token }}
+          path: deploy
+
+      - name: Instalar kustomize
+        run: |
+          curl -sSfL -o kustomize.tar.gz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          tar -xzf kustomize.tar.gz kustomize
+          sudo mv kustomize /usr/local/bin/kustomize
+
+      - name: Fijar el tag en apps/svc-core/overlays/dev
+        working-directory: deploy/apps/svc-core/overlays/dev
+        run: kustomize edit set image "${IMAGE}=${IMAGE}:sha-${{ needs.image.outputs.sha_short }}"
+
+      - name: Commitear y pushear a deploy
+        working-directory: deploy
+        run: |
+          git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+          git config user.email "${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          git add apps/svc-core/overlays/dev/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Sin cambios de imagen, nada que commitear."
+            exit 0
+          fi
+          git commit -m "svc-core: desplegar sha-${{ needs.image.outputs.sha_short }} en dev"
+          git pull --rebase origin main
+          git push origin HEAD:main
