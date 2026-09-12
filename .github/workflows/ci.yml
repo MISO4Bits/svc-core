@@ -154,6 +154,10 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
+          # "app-id" sale como deprecado en el mensaje de la acción a favor
+          # de "client-id", pero ese input todavía no existe en ningún tag
+          # publicado (v3 incluido, confirmado con actionlint) — dejarlo así
+          # hasta que la acción libere una versión que sí lo soporte.
           app-id: ${{ vars.DEPLOY_GITHUB_APP_ID }}
           private-key: ${{ secrets.DEPLOY_GITHUB_APP_PRIVATE_KEY }}
           owner: MISO4Bits
