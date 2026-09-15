@@ -12,6 +12,7 @@ from app.api.errors import install_error_handlers
 from app.api.routes import router
 from app.config import Settings, get_settings
 from app.services import IdentityService
+from app.telemetry import setup_telemetry, shutdown_telemetry
 
 SPEC_PATH = Path(__file__).resolve().parents[2] / "openapi" / "openapi.yaml"
 
@@ -29,12 +30,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for adapter in (clientes, consentimientos, idempotency):
             await maybe_init(adapter)
         yield
+        shutdown_telemetry(telemetry)
 
     app = FastAPI(
         title="ICustomerIdentity — CoreTransaccional",
         version="0.1.0",
         lifespan=lifespan,
     )
+    telemetry = setup_telemetry(app, settings)
     app.state.settings = settings
     app.state.service = service
     app.state.clientes = clientes
