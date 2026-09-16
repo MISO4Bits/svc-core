@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
@@ -75,7 +75,11 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> Telemetry | None:
     for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
         logging.getLogger(logger_name).propagate = True
 
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)
+    # /health lo golpean los probes cada 10-20s — es puro ruido para trazas
+    # de negocio (no aporta nada a "cómo se comportó un endpoint real").
+    FastAPIInstrumentor.instrument_app(
+        app, tracer_provider=tracer_provider, excluded_urls="/health"
+    )
 
     return tracer_provider, meter_provider, logger_provider
 
@@ -87,3 +91,27 @@ def shutdown_telemetry(telemetry: Telemetry | None) -> None:
         return
     for provider in telemetry:
         provider.shutdown()
+
+
+def agregar_encabezado_trace_id(app: FastAPI) -> None:
+    """Expone el ``trace_id`` de la petición como ``X-Trace-Id`` en la
+    respuesta (trazabilidad distribuida, DI-008 — issue 4Bits BITS-92).
+
+    Un mismo ``trace_id`` identifica la transacción completa a través de
+    todos los servicios que la atienden (bff-web → svc-core, cada uno con
+    sus propios spans); el ``span_id`` es propio de cada salto. bff-web ya
+    propaga el ``traceparent`` (W3C Trace Context) en cada llamada
+    saliente por httpx — con ``FastAPIInstrumentor`` activo aquí, este
+    servicio extrae ese header automáticamente y continúa el mismo trace.
+
+    Sin efecto si OTel está deshabilitado: no hay span activo, por lo que
+    ``get_current_span()`` devuelve uno inválido y no se agrega el header.
+    """
+
+    @app.middleware("http")
+    async def _trace_id_en_respuesta(request: Request, call_next):
+        response = await call_next(request)
+        contexto = trace.get_current_span().get_span_context()
+        if contexto.is_valid:
+            response.headers["X-Trace-Id"] = format(contexto.trace_id, "032x")
+        return response

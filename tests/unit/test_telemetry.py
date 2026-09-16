@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.telemetry import setup_telemetry, shutdown_telemetry
+from app.telemetry import agregar_encabezado_trace_id, setup_telemetry, shutdown_telemetry
 
 
 def _settings(**overrides) -> Settings:
@@ -46,3 +47,37 @@ def test_setup_telemetry_habilita_propagacion_de_logs_de_uvicorn():
             assert logging.getLogger(logger_name).propagate is True
     finally:
         shutdown_telemetry(telemetry)
+
+
+def test_agrega_x_trace_id_cuando_hay_un_span_activo():
+    app = FastAPI()
+    telemetry = setup_telemetry(app, _settings(otel_enabled=True))
+    agregar_encabezado_trace_id(app)
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    try:
+        resp = TestClient(app).get("/ping")
+        assert "X-Trace-Id" in resp.headers
+        trace_id = resp.headers["X-Trace-Id"]
+        assert len(trace_id) == 32
+        int(trace_id, 16)  # es hexadecimal válido
+    finally:
+        shutdown_telemetry(telemetry)
+
+
+def test_no_agrega_x_trace_id_sin_otel_habilitado():
+    app = FastAPI()
+    telemetry = setup_telemetry(app, _settings(otel_enabled=False))
+    agregar_encabezado_trace_id(app)
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    resp = TestClient(app).get("/ping")
+
+    assert "X-Trace-Id" not in resp.headers
+    shutdown_telemetry(telemetry)
