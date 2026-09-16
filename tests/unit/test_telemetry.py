@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 
 from app.config import Settings
@@ -28,5 +30,19 @@ def test_setup_telemetry_habilitado_instrumenta_la_app():
         assert tracer_provider is not None
         assert meter_provider is not None
         assert logger_provider is not None
+    finally:
+        shutdown_telemetry(telemetry)
+
+
+def test_setup_telemetry_habilita_propagacion_de_logs_de_uvicorn():
+    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        logging.getLogger(logger_name).propagate = False
+
+    app = FastAPI()
+    telemetry = setup_telemetry(app, _settings(otel_enabled=True))
+
+    try:
+        for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+            assert logging.getLogger(logger_name).propagate is True
     finally:
         shutdown_telemetry(telemetry)

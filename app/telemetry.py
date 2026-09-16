@@ -67,6 +67,14 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> Telemetry | None:
         LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
     )
 
+    # uvicorn configura sus propios loggers ("uvicorn", "uvicorn.access",
+    # "uvicorn.error") con propagate=False por defecto — sin esto, el
+    # access log (incluidos los health checks) nunca llega al handler de
+    # arriba, colgado del root logger. No se les agrega el handler
+    # directamente para no duplicar sus propios logs de consola.
+    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        logging.getLogger(logger_name).propagate = True
+
     FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)
 
     return tracer_provider, meter_provider, logger_provider
