@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 from app.domain import (
@@ -17,7 +18,10 @@ from app.domain import (
     TipoDocumento,
     now_utc,
 )
+from app.logging_utils import sanear_para_log
 from app.ports import ClienteRepository, ConsentimientoRepository, EventPublisher
+
+logger = logging.getLogger("svc_core.identity")
 
 
 class IdentityService:
@@ -45,7 +49,9 @@ class IdentityService:
         segundo_apellido: str | None = None,
         telefono: str | None = None,
     ) -> Cliente:
+        logger.info("registrar_cliente: verificando documento existente")
         if await self._clientes.existe_por_documento(tipo_documento, numero_documento):
+            logger.info("registrar_cliente: documento ya registrado")
             raise ClienteYaExiste(tipo_documento, numero_documento)
 
         cliente = Cliente(
@@ -71,6 +77,7 @@ class IdentityService:
                 },
             )
         )
+        logger.info("registrar_cliente: cliente creado cliente_id=%s", creado.id)
         return creado
 
     async def obtener_cliente(self, cliente_id: str) -> Cliente:
@@ -107,6 +114,9 @@ class IdentityService:
         canal: Canal,
     ) -> Consentimiento:
         await self.obtener_cliente(cliente_id)
+        logger.info(
+            "otorgar_consentimiento: cliente_id=%s scope=%s", sanear_para_log(cliente_id), scope
+        )
         actual = await self._consentimientos.obtener(cliente_id, scope)
         version = actual.version + 1 if actual is not None else 1
         consentimiento = Consentimiento(
@@ -126,6 +136,12 @@ class IdentityService:
                 {"clienteId": cliente_id, "scope": str(scope), "version": guardado.version},
             )
         )
+        logger.info(
+            "otorgar_consentimiento: consentimiento otorgado cliente_id=%s scope=%s version=%s",
+            sanear_para_log(cliente_id),
+            scope,
+            guardado.version,
+        )
         return guardado
 
     async def revocar_consentimiento(self, cliente_id: str, scope: ConsentimientoScope) -> None:
@@ -144,6 +160,12 @@ class IdentityService:
                     "version": consentimiento.version,
                 },
             )
+        )
+        logger.info(
+            "revocar_consentimiento: consentimiento revocado cliente_id=%s scope=%s version=%s",
+            sanear_para_log(cliente_id),
+            scope,
+            consentimiento.version,
         )
 
     async def estado_consentimiento(

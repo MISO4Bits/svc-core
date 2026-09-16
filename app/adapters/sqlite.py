@@ -7,6 +7,7 @@ mismo puerto con Cloud Spanner; el resto del servicio no cambia.
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 
@@ -23,6 +24,9 @@ from app.domain import (
     TipoDocumento,
     now_utc,
 )
+from app.logging_utils import sanear_para_log
+
+logger = logging.getLogger("svc_core.adapters.sqlite")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS clientes (
@@ -156,7 +160,9 @@ class SqliteClienteRepository:
                 )
                 await conn.commit()
             except aiosqlite.IntegrityError as exc:
+                logger.info("sqlite: documento ya registrado (conflicto de unicidad)")
                 raise ClienteYaExiste(cliente.tipo_documento, cliente.numero_documento) from exc
+        logger.info("sqlite: cliente creado cliente_id=%s", cliente.id)
         return cliente
 
     async def obtener(self, cliente_id: str) -> Cliente | None:
@@ -234,6 +240,12 @@ class SqliteConsentimientoRepository:
                 ),
             )
             await conn.commit()
+        logger.info(
+            "sqlite: consentimiento guardado cliente_id=%s scope=%s version=%s",
+            sanear_para_log(consentimiento.cliente_id),
+            consentimiento.scope,
+            consentimiento.version,
+        )
         return consentimiento
 
 

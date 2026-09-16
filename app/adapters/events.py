@@ -11,9 +11,5 @@ logger = logging.getLogger("svc_core.eventos")
 
 class LoggingEventPublisher:
     async def publish(self, event: DomainEvent) -> None:
-        logger.info(
-            "evento_dominio tipo=%s id=%s datos=%s",
-            event.tipo,
-            event.id,
-            event.datos,
-        )
+        # event.datos puede traer PII (email) — no se loguea tal cual.
+        logger.info("evento_dominio: tipo=%s id=%s", event.tipo, event.id)
