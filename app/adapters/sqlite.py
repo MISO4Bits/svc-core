@@ -24,6 +24,7 @@ from app.domain import (
     TipoDocumento,
     now_utc,
 )
+from app.logging_utils import sanear_para_log
 
 logger = logging.getLogger("svc_core.adapters.sqlite")
 
@@ -241,7 +242,7 @@ class SqliteConsentimientoRepository:
             await conn.commit()
         logger.info(
             "sqlite: consentimiento guardado cliente_id=%s scope=%s version=%s",
-            consentimiento.cliente_id,
+            sanear_para_log(consentimiento.cliente_id),
             consentimiento.scope,
             consentimiento.version,
         )

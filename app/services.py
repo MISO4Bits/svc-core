@@ -18,6 +18,7 @@ from app.domain import (
     TipoDocumento,
     now_utc,
 )
+from app.logging_utils import sanear_para_log
 from app.ports import ClienteRepository, ConsentimientoRepository, EventPublisher
 
 logger = logging.getLogger("svc_core.identity")
@@ -113,7 +114,9 @@ class IdentityService:
         canal: Canal,
     ) -> Consentimiento:
         await self.obtener_cliente(cliente_id)
-        logger.info("otorgar_consentimiento: cliente_id=%s scope=%s", cliente_id, scope)
+        logger.info(
+            "otorgar_consentimiento: cliente_id=%s scope=%s", sanear_para_log(cliente_id), scope
+        )
         actual = await self._consentimientos.obtener(cliente_id, scope)
         version = actual.version + 1 if actual is not None else 1
         consentimiento = Consentimiento(
@@ -135,7 +138,7 @@ class IdentityService:
         )
         logger.info(
             "otorgar_consentimiento: consentimiento otorgado cliente_id=%s scope=%s version=%s",
-            cliente_id,
+            sanear_para_log(cliente_id),
             scope,
             guardado.version,
         )
@@ -160,7 +163,7 @@ class IdentityService:
         )
         logger.info(
             "revocar_consentimiento: consentimiento revocado cliente_id=%s scope=%s version=%s",
-            cliente_id,
+            sanear_para_log(cliente_id),
             scope,
             consentimiento.version,
         )
