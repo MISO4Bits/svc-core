@@ -31,6 +31,22 @@ from app.config import Settings
 Telemetry = tuple[TracerProvider, MeterProvider, LoggerProvider]
 
 
+class _AtributosDeTraza(logging.Filter):
+    """Agrega ``trace_id``/``span_id`` como atributos del ``LogRecord``
+    (no toca ``record.msg``) para que el ``Formatter`` del handler de
+    OTel los incluya, en texto plano, en el cuerpo final del log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        contexto = trace.get_current_span().get_span_context()
+        if contexto.is_valid:
+            record.trace_id = format(contexto.trace_id, "032x")
+            record.span_id = format(contexto.span_id, "016x")
+        else:
+            record.trace_id = "-"
+            record.span_id = "-"
+        return True
+
+
 def setup_telemetry(app: FastAPI, settings: Settings) -> Telemetry | None:
     """Configura los proveedores del SDK e instrumenta FastAPI.
 
@@ -63,9 +79,17 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> Telemetry | None:
         BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint, insecure=True))
     )
     set_logger_provider(logger_provider)
-    logging.getLogger().addHandler(
-        LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+    otel_log_handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+    # Grafana Cloud ya recibe trace_id/span_id como campos propios del log
+    # (LogRecord.trace_id/span_id, tomados del span activo) — pero eso solo
+    # se ve al expandir el detalle de la línea en Loki, no permite un
+    # "contiene" de texto plano ni aparece en el listado. Se agregan
+    # también al texto del mensaje para poder buscarlos así.
+    otel_log_handler.addFilter(_AtributosDeTraza())
+    otel_log_handler.setFormatter(
+        logging.Formatter("%(message)s trace_id=%(trace_id)s span_id=%(span_id)s")
     )
+    logging.getLogger().addHandler(otel_log_handler)
 
     # uvicorn configura sus propios loggers ("uvicorn", "uvicorn.access",
     # "uvicorn.error") con propagate=False por defecto — sin esto, el
