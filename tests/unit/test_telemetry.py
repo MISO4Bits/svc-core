@@ -4,10 +4,12 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry.semconv._incubating.attributes import code_attributes
 
 from app.config import Settings
 from app.telemetry import (
     _AtributosDeTraza,
+    _OtelLoggingHandler,
     agregar_encabezado_trace_id,
     setup_telemetry,
     shutdown_telemetry,
@@ -139,3 +141,16 @@ def test_el_texto_del_log_trae_trace_id_y_span_id_reales_con_span_activo():
     assert len(span_id) == 16
     int(trace_id, 16)
     int(span_id, 16)
+
+
+def test_get_attributes_quita_code_line_number_y_recorta_code_file_path():
+    record = _registro("cliente creado")
+    record.pathname = "/app/app/adapters/sqlite.py"
+    record.funcName = "crear"
+    record.lineno = 130
+
+    atributos = _OtelLoggingHandler._get_attributes(record)
+
+    assert code_attributes.CODE_LINE_NUMBER not in atributos
+    assert atributos[code_attributes.CODE_FILE_PATH] == "sqlite.py"
+    assert atributos[code_attributes.CODE_FUNCTION_NAME] == "crear"
