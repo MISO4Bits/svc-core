@@ -10,6 +10,7 @@ no se instrumenta httpx aquí.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import FastAPI, Request
 from opentelemetry import metrics, trace
@@ -25,10 +26,50 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.semconv._incubating.attributes import code_attributes
 
 from app.config import Settings
 
 Telemetry = tuple[TracerProvider, MeterProvider, LoggerProvider]
+
+
+class _OtelLoggingHandler(LoggingHandler):
+    """``LoggingHandler`` de ``opentelemetry-sdk`` recortando el ruido que
+    agrega ``_get_attributes()`` en cada log (``code.line.number``,
+    ``code.file.path`` con la ruta absoluta dentro del contenedor) —
+    ``_get_attributes`` es un ``staticmethod`` sin parámetro para
+    desactivar esto, así que se sobreescribe.
+
+    Nota: esta clase del SDK está deprecada (advierte usar
+    ``opentelemetry-instrumentation-logging`` en su lugar) — no se migró
+    todavía, es un cambio de paquete aparte, no algo para mezclar con
+    este ajuste puntual de qué atributos exportar.
+    """
+
+    @staticmethod
+    def _get_attributes(record: logging.LogRecord) -> dict:
+        attributes = LoggingHandler._get_attributes(record)
+        attributes.pop(code_attributes.CODE_LINE_NUMBER, None)
+        ruta = attributes.get(code_attributes.CODE_FILE_PATH)
+        if ruta:
+            attributes[code_attributes.CODE_FILE_PATH] = os.path.basename(ruta)
+        return attributes
+
+
+class _AtributosDeTraza(logging.Filter):
+    """Agrega ``trace_id``/``span_id`` como atributos del ``LogRecord``
+    (no toca ``record.msg``) para que el ``Formatter`` del handler de
+    OTel los incluya, en texto plano, en el cuerpo final del log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        contexto = trace.get_current_span().get_span_context()
+        if contexto.is_valid:
+            record.trace_id = format(contexto.trace_id, "032x")
+            record.span_id = format(contexto.span_id, "016x")
+        else:
+            record.trace_id = "-"
+            record.span_id = "-"
+        return True
 
 
 def setup_telemetry(app: FastAPI, settings: Settings) -> Telemetry | None:
@@ -63,9 +104,17 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> Telemetry | None:
         BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint, insecure=True))
     )
     set_logger_provider(logger_provider)
-    logging.getLogger().addHandler(
-        LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+    otel_log_handler = _OtelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+    # Grafana Cloud ya recibe trace_id/span_id como campos propios del log
+    # (LogRecord.trace_id/span_id, tomados del span activo) — pero eso solo
+    # se ve al expandir el detalle de la línea en Loki, no permite un
+    # "contiene" de texto plano ni aparece en el listado. Se agregan
+    # también al texto del mensaje para poder buscarlos así.
+    otel_log_handler.addFilter(_AtributosDeTraza())
+    otel_log_handler.setFormatter(
+        logging.Formatter("%(message)s trace_id=%(trace_id)s span_id=%(span_id)s")
     )
+    logging.getLogger().addHandler(otel_log_handler)
 
     # uvicorn configura sus propios loggers ("uvicorn", "uvicorn.access",
     # "uvicorn.error") con propagate=False por defecto — sin esto, el

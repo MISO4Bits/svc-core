@@ -4,9 +4,16 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry.semconv._incubating.attributes import code_attributes
 
 from app.config import Settings
-from app.telemetry import agregar_encabezado_trace_id, setup_telemetry, shutdown_telemetry
+from app.telemetry import (
+    _AtributosDeTraza,
+    _OtelLoggingHandler,
+    agregar_encabezado_trace_id,
+    setup_telemetry,
+    shutdown_telemetry,
+)
 
 
 def _settings(**overrides) -> Settings:
@@ -81,3 +88,69 @@ def test_no_agrega_x_trace_id_sin_otel_habilitado():
 
     assert "X-Trace-Id" not in resp.headers
     shutdown_telemetry(telemetry)
+
+
+def _handler_de_prueba() -> logging.Handler:
+    handler = logging.NullHandler()
+    handler.addFilter(_AtributosDeTraza())
+    handler.setFormatter(logging.Formatter("%(message)s trace_id=%(trace_id)s span_id=%(span_id)s"))
+    return handler
+
+
+def _registro(mensaje: str) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg=mensaje,
+        args=None,
+        exc_info=None,
+    )
+
+
+def test_el_texto_del_log_trae_trace_id_y_span_id_sin_span_activo():
+    handler = _handler_de_prueba()
+    record = _registro("cliente creado")
+
+    handler.filter(record)
+    texto = handler.format(record)
+
+    assert texto == "cliente creado trace_id=- span_id=-"
+
+
+def test_el_texto_del_log_trae_trace_id_y_span_id_reales_con_span_activo():
+    app = FastAPI()
+    telemetry = setup_telemetry(app, _settings(otel_enabled=True))
+    handler = _handler_de_prueba()
+    record = _registro("cliente creado")
+
+    try:
+        tracer_provider, _, _ = telemetry
+        with tracer_provider.get_tracer(__name__).start_as_current_span("span-de-prueba"):
+            handler.filter(record)
+            texto = handler.format(record)
+    finally:
+        shutdown_telemetry(telemetry)
+
+    assert texto.startswith("cliente creado trace_id=")
+    resto, span_parte = texto.rsplit(" span_id=", 1)
+    trace_id = resto.removeprefix("cliente creado trace_id=")
+    span_id = span_parte
+    assert len(trace_id) == 32
+    assert len(span_id) == 16
+    int(trace_id, 16)
+    int(span_id, 16)
+
+
+def test_get_attributes_quita_code_line_number_y_recorta_code_file_path():
+    record = _registro("cliente creado")
+    record.pathname = "/app/app/adapters/sqlite.py"
+    record.funcName = "crear"
+    record.lineno = 130
+
+    atributos = _OtelLoggingHandler._get_attributes(record)
+
+    assert code_attributes.CODE_LINE_NUMBER not in atributos
+    assert atributos[code_attributes.CODE_FILE_PATH] == "sqlite.py"
+    assert atributos[code_attributes.CODE_FUNCTION_NAME] == "crear"
