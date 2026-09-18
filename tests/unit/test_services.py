@@ -97,6 +97,11 @@ async def test_otorgar_consentimiento_incrementa_version(service, events):
         "ConsentimientoOtorgado",
         "ConsentimientoOtorgado",
     ]
+    # Perfilamiento consume este evento de forma asíncrona y necesita el
+    # documento del cliente para consultar Open Finance/Open Data sin
+    # llamar de vuelta a CoreTransaccional.
+    assert events.events[-1].datos["tipoDocumento"] == "CC"
+    assert events.events[-1].datos["numeroDocumento"] == "123456"
 
 
 async def test_otorgar_consentimiento_cliente_inexistente(service):
