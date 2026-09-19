@@ -113,7 +113,7 @@ class IdentityService:
         politica_version: str,
         canal: Canal,
     ) -> Consentimiento:
-        await self.obtener_cliente(cliente_id)
+        cliente = await self.obtener_cliente(cliente_id)
         logger.info(
             "otorgar_consentimiento: cliente_id=%s scope=%s", sanear_para_log(cliente_id), scope
         )
@@ -133,7 +133,19 @@ class IdentityService:
         await self._events.publish(
             DomainEvent(
                 "ConsentimientoOtorgado",
-                {"clienteId": cliente_id, "scope": str(scope), "version": guardado.version},
+                {
+                    "clienteId": cliente_id,
+                    "scope": str(scope),
+                    "version": guardado.version,
+                    # Perfilamiento consume este evento de forma asíncrona y
+                    # necesita el documento para consultar Open Finance/Open
+                    # Data — viaja en el propio evento para que el consumidor
+                    # no tenga que llamar de vuelta a CoreTransaccional
+                    # (Confluence, página Perfilamiento, Sección 8, decisión
+                    # 2026-09-18: sin puerto síncrono nuevo hacia Core).
+                    "tipoDocumento": str(cliente.tipo_documento),
+                    "numeroDocumento": cliente.numero_documento,
+                },
             )
         )
         logger.info(
