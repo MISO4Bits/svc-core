@@ -14,6 +14,8 @@ import asyncio
 import json
 import logging
 
+from opentelemetry import propagate
+
 from app.domain import DomainEvent
 
 logger = logging.getLogger("svc_core.adapters.pubsub")
@@ -35,7 +37,12 @@ class PubSubEventPublisher:  # pragma: no cover
                 "datos": event.datos,
             }
         ).encode("utf-8")
-        future = self._publisher.publish(self._topic_path, payload, tipo=event.tipo)
+        # Contexto de traza W3C (traceparent) como atributo del mensaje —
+        # sin esto, el consumidor arranca sin span activo y el trace se
+        # corta en la frontera async (Pub/Sub no propaga esto solo).
+        atributos = {"tipo": event.tipo}
+        propagate.inject(atributos)
+        future = self._publisher.publish(self._topic_path, payload, **atributos)
         # future.result() es bloqueante (API síncrona del cliente de
         # Pub/Sub) — se ejecuta en un hilo aparte para no congelar el loop
         # de asyncio mientras espera el ack del servidor.
