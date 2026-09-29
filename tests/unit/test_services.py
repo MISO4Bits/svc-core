@@ -15,6 +15,7 @@ from app.domain import (
     ClienteYaExiste,
     ConsentimientoNoEncontrado,
     ConsentimientoScope,
+    CorreoDesechable,
     EstadoConsentimiento,
     TipoDocumento,
 )
@@ -28,6 +29,7 @@ DATOS = dict(
     primer_apellido="Ríos",
     fecha_nacimiento=date(1990, 1, 1),
     email="ana@example.com",
+    autoriza_datos_financieros=True,
 )
 
 
@@ -38,7 +40,8 @@ def events() -> InMemoryEventPublisher:
 
 @pytest.fixture
 def service(events: InMemoryEventPublisher) -> IdentityService:
-    return IdentityService(InMemoryClienteRepository(), InMemoryConsentimientoRepository(), events)
+    consentimientos = InMemoryConsentimientoRepository()
+    return IdentityService(InMemoryClienteRepository(consentimientos), consentimientos, events)
 
 
 async def test_registrar_cliente_publica_evento(service, events):
@@ -52,8 +55,66 @@ async def test_registrar_cliente_publica_evento(service, events):
 
 async def test_registrar_cliente_duplicado(service):
     await service.registrar_cliente(**DATOS)
-    with pytest.raises(ClienteYaExiste):
-        await service.registrar_cliente(**DATOS)
+    with pytest.raises(ClienteYaExiste) as exc_info:
+        await service.registrar_cliente(**{**DATOS, "email": "otro@example.com"})
+    assert exc_info.value.campo == "documento"
+
+
+async def test_registrar_cliente_correo_duplicado(service):
+    await service.registrar_cliente(**DATOS)
+    with pytest.raises(ClienteYaExiste) as exc_info:
+        await service.registrar_cliente(**{**DATOS, "numero_documento": "999999"})
+    assert exc_info.value.campo == "correo"
+
+
+async def test_registrar_cliente_correo_desechable(service):
+    with pytest.raises(CorreoDesechable):
+        await service.registrar_cliente(**{**DATOS, "email": "ana@mailinator.com"})
+
+
+async def test_registrar_cliente_declina_financiero_no_bloquea(service, events):
+    cliente = await service.registrar_cliente(**{**DATOS, "autoriza_datos_financieros": False})
+
+    assert cliente.id
+    consentimiento = await service.obtener_consentimiento(
+        cliente.id, ConsentimientoScope.OPEN_FINANCE
+    )
+    assert consentimiento.estado is EstadoConsentimiento.NO_OTORGADO
+    assert events.events[-1].datos["autorizaDatosFinancieros"] is False
+
+
+async def test_existe_cliente(service):
+    await service.registrar_cliente(**DATOS)
+
+    disponible = await service.existe_cliente(email="libre@example.com")
+    assert disponible == {"correoDisponible": True, "documentoDisponible": None}
+
+    ocupado = await service.existe_cliente(
+        email=DATOS["email"],
+        tipo_documento=DATOS["tipo_documento"],
+        numero_documento=DATOS["numero_documento"],
+    )
+    assert ocupado == {"correoDisponible": False, "documentoDisponible": False}
+
+    sin_consulta = await service.existe_cliente()
+    assert sin_consulta == {"correoDisponible": None, "documentoDisponible": None}
+
+
+async def test_confirmar_cliente_es_idempotente(service):
+    cliente = await service.registrar_cliente(**DATOS)
+    assert cliente.correo_confirmado is False
+
+    confirmado = await service.confirmar_cliente(cliente.id)
+    assert confirmado.correo_confirmado is True
+    primera_confirmacion = confirmado.confirmado_en
+
+    confirmado_otra_vez = await service.confirmar_cliente(cliente.id)
+    assert confirmado_otra_vez.confirmado_en == primera_confirmacion
+
+
+async def test_confirmar_cliente_inexistente(service):
+    with pytest.raises(ClienteNoEncontrado):
+        await service.confirmar_cliente("no-existe")
 
 
 async def test_obtener_cliente_inexistente(service):
@@ -75,17 +136,19 @@ async def test_listar_consentimientos_cliente_inexistente(service):
 
 
 async def test_otorgar_consentimiento_incrementa_version(service, events):
+    # OPEN_DATA porque OPEN_FINANCE ya queda en version 1 desde el registro
+    # unificado (BITS-93) cuando autoriza_datos_financieros=True.
     cliente = await service.registrar_cliente(**DATOS)
 
     c1 = await service.otorgar_consentimiento(
         cliente.id,
-        scope=ConsentimientoScope.OPEN_FINANCE,
+        scope=ConsentimientoScope.OPEN_DATA,
         politica_version="v1",
         canal=Canal.WEB,
     )
     c2 = await service.otorgar_consentimiento(
         cliente.id,
-        scope=ConsentimientoScope.OPEN_FINANCE,
+        scope=ConsentimientoScope.OPEN_DATA,
         politica_version="v2",
         canal=Canal.WEB,
     )

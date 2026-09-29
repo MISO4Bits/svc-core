@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-from app.domain import Cliente, Consentimiento, ConsentimientoScope, DomainEvent
+from app.domain import Cliente, Consentimiento, ConsentimientoScope, DomainEvent, now_utc
 
 
 class InMemoryClienteRepository:
-    def __init__(self) -> None:
+    def __init__(self, consentimientos: InMemoryConsentimientoRepository | None = None) -> None:
         self._by_id: dict[str, Cliente] = {}
         self._docs: set[tuple[str, str]] = set()
+        self._emails: set[str] = set()
+        self._consentimientos = consentimientos
 
-    async def crear(self, cliente: Cliente) -> Cliente:
+    async def crear_con_consentimiento(
+        self, cliente: Cliente, consentimiento: Consentimiento | None
+    ) -> Cliente:
         self._by_id[cliente.id] = cliente
         self._docs.add((str(cliente.tipo_documento), cliente.numero_documento))
+        self._emails.add(cliente.email)
+        if consentimiento is not None and self._consentimientos is not None:
+            await self._consentimientos.guardar(consentimiento)
         return cliente
 
     async def obtener(self, cliente_id: str) -> Cliente | None:
@@ -23,6 +30,18 @@ class InMemoryClienteRepository:
 
     async def existe_por_documento(self, tipo_documento: str, numero_documento: str) -> bool:
         return (str(tipo_documento), numero_documento) in self._docs
+
+    async def existe_por_correo(self, email: str) -> bool:
+        return email in self._emails
+
+    async def confirmar(self, cliente_id: str) -> Cliente | None:
+        cliente = self._by_id.get(cliente_id)
+        if cliente is None:
+            return None
+        if not cliente.correo_confirmado:
+            cliente.correo_confirmado = True
+            cliente.confirmado_en = now_utc()
+        return cliente
 
 
 class InMemoryConsentimientoRepository:

@@ -92,6 +92,16 @@ async def test_respuestas_cumplen_el_esquema(client, openapi_spec):
     for item in lista.json():
         _assert_valid(openapi_spec, "Consentimiento", item)
 
+    disponibilidad = await client.get(
+        "/clientes/disponibilidad", params={"correo": "otro@example.com"}
+    )
+    assert disponibilidad.status_code == 200
+    _assert_valid(openapi_spec, "Disponibilidad", disponibilidad.json())
+
+    confirmado = await client.post(f"/clientes/{cliente_id}/confirmacion")
+    assert confirmado.status_code == 200
+    _assert_valid(openapi_spec, "Cliente", confirmado.json())
+
 
 async def test_errores_cumplen_problem_details(client, openapi_spec):
     no_existe = await client.get("/clientes/desconocido")

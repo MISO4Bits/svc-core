@@ -21,6 +21,7 @@ CLIENTE_VALIDO = {
     "primerApellido": "Ríos",
     "fechaNacimiento": "1991-05-20",
     "email": "ana.rios@example.com",
+    "autorizaDatosFinancieros": True,
 }
 
 

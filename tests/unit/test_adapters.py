@@ -46,10 +46,16 @@ def _cliente(**over) -> Cliente:
 
 
 async def test_memory_cliente_repository_ciclo():
-    repo = InMemoryClienteRepository()
+    consentimientos = InMemoryConsentimientoRepository()
+    repo = InMemoryClienteRepository(consentimientos)
     cliente = _cliente()
+    consentimiento = Consentimiento(
+        cliente_id=cliente.id,
+        scope=ConsentimientoScope.OPEN_FINANCE,
+        estado=EstadoConsentimiento.OTORGADO,
+    )
 
-    await repo.crear(cliente)
+    await repo.crear_con_consentimiento(cliente, consentimiento)
 
     assert await repo.obtener(cliente.id) == cliente
     assert await repo.obtener("otro") is None
@@ -57,6 +63,23 @@ async def test_memory_cliente_repository_ciclo():
     assert await repo.obtener_por_identity_ref("sub-x") is None
     assert await repo.existe_por_documento("CC", "123456") is True
     assert await repo.existe_por_documento("CC", "999") is False
+    assert await repo.existe_por_correo("ana@example.com") is True
+    assert await repo.existe_por_correo("otro@example.com") is False
+    assert await consentimientos.obtener(cliente.id, ConsentimientoScope.OPEN_FINANCE) is not None
+
+
+async def test_memory_cliente_repository_confirmar_es_idempotente():
+    repo = InMemoryClienteRepository()
+    cliente = _cliente()
+    await repo.crear_con_consentimiento(cliente, None)
+
+    confirmado = await repo.confirmar(cliente.id)
+    assert confirmado.correo_confirmado is True
+    primera_vez = confirmado.confirmado_en
+
+    confirmado_otra_vez = await repo.confirmar(cliente.id)
+    assert confirmado_otra_vez.confirmado_en == primera_vez
+    assert await repo.confirmar("no-existe") is None
 
 
 async def test_memory_consentimiento_repository_listar_ordenado():
@@ -104,11 +127,52 @@ async def test_sqlite_cliente_repository_conflicto(tmp_path):
     await db.init()
     repo = SqliteClienteRepository(db)
 
-    creado = await repo.crear(_cliente())
+    creado = await repo.crear_con_consentimiento(_cliente(), None)
     with pytest.raises(ClienteYaExiste):
-        await repo.crear(_cliente(identity_ref="sub-2"))
+        await repo.crear_con_consentimiento(_cliente(identity_ref="sub-2"), None)
     assert (await repo.obtener_por_identity_ref("sub-1")).id == creado.id
     assert await repo.obtener_por_identity_ref("ausente") is None
+    assert await repo.existe_por_correo("ana@example.com") is True
+    assert await repo.existe_por_correo("otro@example.com") is False
+
+
+async def test_sqlite_cliente_repository_confirmar_es_idempotente(tmp_path):
+    db = SqliteDatabase(str(tmp_path / "c.db"))
+    await db.init()
+    repo = SqliteClienteRepository(db)
+    creado = await repo.crear_con_consentimiento(_cliente(), None)
+    assert creado.correo_confirmado is False
+
+    confirmado = await repo.confirmar(creado.id)
+    assert confirmado.correo_confirmado is True
+    primera_vez = confirmado.confirmado_en
+
+    confirmado_otra_vez = await repo.confirmar(creado.id)
+    assert confirmado_otra_vez.confirmado_en == primera_vez
+    assert await repo.confirmar("no-existe") is None
+
+
+async def test_sqlite_crear_con_consentimiento_persiste_consentimiento(tmp_path):
+    from app.adapters.sqlite import SqliteConsentimientoRepository
+
+    db = SqliteDatabase(str(tmp_path / "c.db"))
+    await db.init()
+    repo = SqliteClienteRepository(db)
+    consentimiento = Consentimiento(
+        cliente_id="",
+        scope=ConsentimientoScope.OPEN_FINANCE,
+        estado=EstadoConsentimiento.OTORGADO,
+    )
+    cliente = _cliente()
+    consentimiento.cliente_id = cliente.id
+
+    await repo.crear_con_consentimiento(cliente, consentimiento)
+
+    guardado = await SqliteConsentimientoRepository(db).obtener(
+        cliente.id, ConsentimientoScope.OPEN_FINANCE
+    )
+    assert guardado is not None
+    assert guardado.estado is EstadoConsentimiento.OTORGADO
 
 
 async def test_sqlite_consentimiento_upsert(tmp_path):

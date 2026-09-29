@@ -67,13 +67,21 @@ paths:
       summary: Registra un cliente
       description: |
         Crea el registro de cliente en estado `ACTIVO` y lo enlaza con la identidad
-        de autenticación (`identityRef`).
+        de autenticación (`identityRef`). Crea atómicamente el consentimiento
+        `OPEN_FINANCE` a partir de `autorizaDatosFinancieros` (BITS-93 AC-9: declinarlo
+        no bloquea el registro, solo deja el consentimiento en `NO_OTORGADO`).
+
+        Valida que el dominio del correo no esté en la lista de dominios desechables
+        (AC-7) y que ni el correo ni el documento ya existan (AC-5) — responde `409`
+        indicando el campo en conflicto sin revelar más datos del otro cliente.
 
         Idempotente por (`tipoDocumento`, `numeroDocumento`): si el cliente ya existe
         responde `409` sin modificar nada. Con `Idempotency-Key`, un reintento con la
         misma clave devuelve la respuesta original `201`.
 
-        Publica el evento de dominio `ClienteRegistrado`.
+        Publica el evento de dominio `ClienteRegistrado` (incluye el resultado del
+        consentimiento financiero, lo consume Perfilamiento para decidir si consulta
+        Open Finance).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -94,6 +102,60 @@ paths:
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
         '409': { $ref: '#/components/responses/Conflicto' }
         '422': { $ref: '#/components/responses/EntidadNoProcesable' }
+
+  /clientes/disponibilidad:
+    get:
+      operationId: consultarDisponibilidad
+      tags: [Clientes]
+      summary: Consulta si un correo y/o documento ya están registrados
+      description: |
+        Chequeo de solo lectura para validación en vivo del formulario de registro
+        (BITS-93). No reemplaza la validación atómica de unicidad que hace
+        `POST /clientes` en el momento de crear — esta consulta es una ayuda de UX,
+        sujeta a condiciones de carrera.
+      parameters:
+        - name: correo
+          in: query
+          required: false
+          schema: { type: string, format: email, maxLength: 254 }
+        - name: tipoDocumento
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/TipoDocumento' }
+        - name: numeroDocumento
+          in: query
+          required: false
+          schema: { type: string, minLength: 4, maxLength: 20 }
+      responses:
+        '200':
+          description: Disponibilidad de los campos consultados.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Disponibilidad' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+
+  /clientes/{clienteId}/confirmacion:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+    post:
+      operationId: confirmarCliente
+      tags: [Clientes]
+      summary: Confirma el correo del cliente
+      description: |
+        Transiciona el cliente a `correoConfirmado = true` (BITS-93 AC-3). Lo invoca
+        el BFF una vez Identity Platform valida el enlace de activación — el
+        vencimiento del enlace lo controla Identity Platform con su comportamiento
+        por defecto, esta operación no impone una ventana propia.
+
+        Idempotente: confirmar una cuenta ya confirmada no falla, solo devuelve el
+        estado actual sin modificar `confirmadoEn`.
+      responses:
+        '200':
+          description: Cliente confirmado (o ya lo estaba).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cliente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
 
   /clientes/{clienteId}:
     parameters:
@@ -238,7 +300,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problema' }
     Conflicto:
-      description: El cliente ya existe para ese documento.
+      description: Ya existe un cliente para ese documento o ese correo (ver `errores[].campo`).
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problema' }
@@ -253,7 +315,7 @@ components:
     RegistrarClienteRequest:
       type: object
       additionalProperties: false
-      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email]
+      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, autorizaDatosFinancieros]
       properties:
         identityRef:
           type: string
@@ -278,11 +340,16 @@ components:
         telefono:
           type: [string, 'null']
           pattern: '^\+?[0-9]{7,15}$'
+        autorizaDatosFinancieros:
+          type: boolean
+          description: |
+            Consentimiento OPEN_FINANCE otorgado en el propio registro (BITS-93 AC-9).
+            `false` no bloquea el registro; solo deja el consentimiento en `NO_OTORGADO`.
 
     Cliente:
       type: object
       additionalProperties: false
-      required: [id, identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, estado, creadoEn]
+      required: [id, identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, estado, correoConfirmado, creadoEn]
       properties:
         id: { type: string, format: uuid }
         identityRef: { type: string }
@@ -296,8 +363,19 @@ components:
         email: { type: string, format: email }
         telefono: { type: [string, 'null'] }
         estado: { $ref: '#/components/schemas/EstadoCliente' }
+        correoConfirmado:
+          type: boolean
+          description: BITS-93 AC-3 — no condiciona cotización ni coberturas, solo la formalización del contrato.
+        confirmadoEn: { type: [string, 'null'], format: date-time }
         creadoEn: { type: string, format: date-time }
         actualizadoEn: { type: [string, 'null'], format: date-time }
+
+    Disponibilidad:
+      type: object
+      additionalProperties: false
+      properties:
+        correoDisponible: { type: [boolean, 'null'], description: 'null si no se consultó correo.' }
+        documentoDisponible: { type: [boolean, 'null'], description: 'null si no se consultó documento.' }
 
     OtorgarConsentimientoRequest:
       type: object

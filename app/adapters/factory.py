@@ -28,9 +28,10 @@ def build_repositories(
     settings: Settings,
 ) -> tuple[ClienteRepository, ConsentimientoRepository, IdempotencyStore]:
     if settings.repository_backend == "memory":
+        consentimientos = InMemoryConsentimientoRepository()
         return (
-            InMemoryClienteRepository(),
-            InMemoryConsentimientoRepository(),
+            InMemoryClienteRepository(consentimientos),
+            consentimientos,
             InMemoryIdempotencyStore(),
         )
     if settings.repository_backend == "sqlite":

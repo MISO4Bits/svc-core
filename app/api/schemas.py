@@ -40,6 +40,7 @@ class RegistrarClienteRequest(_Model):
     fecha_nacimiento: date
     email: str = Field(max_length=254, pattern=_EMAIL)
     telefono: str | None = Field(default=None, pattern=_TELEFONO)
+    autoriza_datos_financieros: bool
 
 
 class ClienteOut(_Model):
@@ -55,8 +56,15 @@ class ClienteOut(_Model):
     email: str
     telefono: str | None = None
     estado: EstadoCliente
+    correo_confirmado: bool
+    confirmado_en: datetime | None = None
     creado_en: datetime
     actualizado_en: datetime | None = None
+
+
+class DisponibilidadOut(_Model):
+    correo_disponible: bool | None = None
+    documento_disponible: bool | None = None
 
 
 class OtorgarConsentimientoRequest(_Model):
