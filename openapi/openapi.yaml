@@ -67,9 +67,12 @@ paths:
       summary: Registra un cliente
       description: |
         Crea el registro de cliente en estado `ACTIVO` y lo enlaza con la identidad
-        de autenticación (`identityRef`). Crea atómicamente el consentimiento
-        `OPEN_FINANCE` a partir de `autorizaDatosFinancieros` (BITS-93 AC-9: declinarlo
-        no bloquea el registro, solo deja el consentimiento en `NO_OTORGADO`).
+        de autenticación (`identityRef`). Crea atómicamente los consentimientos
+        `OPEN_DATA` (tratamiento de datos personales) y `OPEN_FINANCE` (datos
+        financieros) a partir de `autorizaTratamientoDatos` y
+        `autorizaDatosFinancieros` — ninguno de los dos bloquea el registro
+        (BITS-93 AC-9): declinarlos solo deja el consentimiento correspondiente en
+        `NO_OTORGADO`.
 
         Valida que el dominio del correo no esté en la lista de dominios desechables
         (AC-7) y que ni el correo ni el documento ya existan (AC-5) — responde `409`
@@ -315,7 +318,7 @@ components:
     RegistrarClienteRequest:
       type: object
       additionalProperties: false
-      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, autorizaDatosFinancieros]
+      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, canal, autorizaTratamientoDatos, autorizaDatosFinancieros]
       properties:
         identityRef:
           type: string
@@ -340,11 +343,28 @@ components:
         telefono:
           type: [string, 'null']
           pattern: '^\+?[0-9]{7,15}$'
+        canal:
+          $ref: '#/components/schemas/Canal'
+          description: Canal desde el que se registra, para el consentimiento (igual que en otorgarConsentimiento).
+        autorizaTratamientoDatos:
+          type: boolean
+          description: |
+            Consentimiento OPEN_DATA (tratamiento de datos personales) otorgado en el
+            propio registro (BITS-93). `false` no bloquea el registro; solo deja el
+            consentimiento en `NO_OTORGADO`.
+        politicaVersionTratamientoDatos:
+          type: [string, 'null']
+          maxLength: 20
+          description: Versión del aviso de tratamiento de datos aceptado. Solo aplica si se autoriza.
         autorizaDatosFinancieros:
           type: boolean
           description: |
             Consentimiento OPEN_FINANCE otorgado en el propio registro (BITS-93 AC-9).
             `false` no bloquea el registro; solo deja el consentimiento en `NO_OTORGADO`.
+        politicaVersionDatosFinancieros:
+          type: [string, 'null']
+          maxLength: 20
+          description: Versión de la autorización de datos financieros aceptada. Solo aplica si se autoriza.
 
     Cliente:
       type: object

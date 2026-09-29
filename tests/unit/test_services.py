@@ -11,6 +11,7 @@ from app.adapters.memory import (
 )
 from app.domain import (
     Canal,
+    Cliente,
     ClienteNoEncontrado,
     ClienteYaExiste,
     ConsentimientoNoEncontrado,
@@ -29,6 +30,8 @@ DATOS = dict(
     primer_apellido="Ríos",
     fecha_nacimiento=date(1990, 1, 1),
     email="ana@example.com",
+    canal=Canal.WEB,
+    autoriza_tratamiento_datos=True,
     autoriza_datos_financieros=True,
 )
 
@@ -39,9 +42,16 @@ def events() -> InMemoryEventPublisher:
 
 
 @pytest.fixture
-def service(events: InMemoryEventPublisher) -> IdentityService:
+def repos():
     consentimientos = InMemoryConsentimientoRepository()
-    return IdentityService(InMemoryClienteRepository(consentimientos), consentimientos, events)
+    clientes = InMemoryClienteRepository(consentimientos)
+    return clientes, consentimientos
+
+
+@pytest.fixture
+def service(repos, events: InMemoryEventPublisher) -> IdentityService:
+    clientes, consentimientos = repos
+    return IdentityService(clientes, consentimientos, events)
 
 
 async def test_registrar_cliente_publica_evento(service, events):
@@ -81,6 +91,16 @@ async def test_registrar_cliente_declina_financiero_no_bloquea(service, events):
     )
     assert consentimiento.estado is EstadoConsentimiento.NO_OTORGADO
     assert events.events[-1].datos["autorizaDatosFinancieros"] is False
+
+
+async def test_registrar_cliente_declina_tratamiento_datos_no_bloquea(service, events):
+    cliente = await service.registrar_cliente(**{**DATOS, "autoriza_tratamiento_datos": False})
+
+    assert cliente.id
+    consentimiento = await service.obtener_consentimiento(cliente.id, ConsentimientoScope.OPEN_DATA)
+    assert consentimiento.estado is EstadoConsentimiento.NO_OTORGADO
+    assert consentimiento.politica_version is None
+    assert events.events[-1].datos["autorizaTratamientoDatos"] is False
 
 
 async def test_existe_cliente(service):
@@ -136,8 +156,9 @@ async def test_listar_consentimientos_cliente_inexistente(service):
 
 
 async def test_otorgar_consentimiento_incrementa_version(service, events):
-    # OPEN_DATA porque OPEN_FINANCE ya queda en version 1 desde el registro
-    # unificado (BITS-93) cuando autoriza_datos_financieros=True.
+    # El registro unificado (BITS-93) ya crea OPEN_DATA en version 1 cuando
+    # autoriza_tratamiento_datos=True, así que un otorgamiento posterior parte
+    # de ahí, no de version 1.
     cliente = await service.registrar_cliente(**DATOS)
 
     c1 = await service.otorgar_consentimiento(
@@ -153,8 +174,8 @@ async def test_otorgar_consentimiento_incrementa_version(service, events):
         canal=Canal.WEB,
     )
 
-    assert c1.version == 1
-    assert c2.version == 2
+    assert c1.version == 2
+    assert c2.version == 3
     assert c2.vigente is True
     assert [e.tipo for e in events.events[-2:]] == [
         "ConsentimientoOtorgado",
@@ -177,8 +198,25 @@ async def test_otorgar_consentimiento_cliente_inexistente(service):
         )
 
 
-async def test_obtener_consentimiento_inexistente(service):
-    cliente = await service.registrar_cliente(**DATOS)
+async def test_obtener_consentimiento_inexistente(repos):
+    # El registro unificado (BITS-93) ya crea un registro por scope (OTORGADO o
+    # NO_OTORGADO), así que para probar "no encontrado" hay que insertar un
+    # cliente sin pasar por el registro (sin consentimientos asociados).
+    clientes, _ = repos
+    cliente = await clientes.crear_con_consentimientos(
+        Cliente(
+            identity_ref="sub-x",
+            tipo_documento=TipoDocumento.CC,
+            numero_documento="000000",
+            primer_nombre="Sin",
+            primer_apellido="Consentimientos",
+            fecha_nacimiento=date(1990, 1, 1),
+            email="sin-consentimientos@example.com",
+        ),
+        [],
+    )
+    consentimientos = InMemoryConsentimientoRepository()
+    service = IdentityService(clientes, consentimientos, InMemoryEventPublisher())
     with pytest.raises(ConsentimientoNoEncontrado):
         await service.obtener_consentimiento(cliente.id, ConsentimientoScope.OPEN_DATA)
 
@@ -201,8 +239,23 @@ async def test_revocar_consentimiento(service, events):
     assert events.events[-1].tipo == "ConsentimientoRevocado"
 
 
-async def test_revocar_consentimiento_inexistente(service):
-    cliente = await service.registrar_cliente(**DATOS)
+async def test_revocar_consentimiento_inexistente(repos):
+    clientes, _ = repos
+    cliente = await clientes.crear_con_consentimientos(
+        Cliente(
+            identity_ref="sub-y",
+            tipo_documento=TipoDocumento.CC,
+            numero_documento="000001",
+            primer_nombre="Sin",
+            primer_apellido="Consentimientos",
+            fecha_nacimiento=date(1990, 1, 1),
+            email="sin-consentimientos-2@example.com",
+        ),
+        [],
+    )
+    service = IdentityService(
+        clientes, InMemoryConsentimientoRepository(), InMemoryEventPublisher()
+    )
     with pytest.raises(ConsentimientoNoEncontrado):
         await service.revocar_consentimiento(cliente.id, ConsentimientoScope.OPEN_DATA)
 

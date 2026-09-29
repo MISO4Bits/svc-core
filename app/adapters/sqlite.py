@@ -148,8 +148,8 @@ class SqliteClienteRepository:
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
 
-    async def crear_con_consentimiento(
-        self, cliente: Cliente, consentimiento: Consentimiento | None
+    async def crear_con_consentimientos(
+        self, cliente: Cliente, consentimientos: list[Consentimiento]
     ) -> Cliente:
         async with self._db.connect() as conn:
             try:
@@ -181,7 +181,7 @@ class SqliteClienteRepository:
                         _iso(cliente.actualizado_en),
                     ),
                 )
-                if consentimiento is not None:
+                for consentimiento in consentimientos:
                     await conn.execute(
                         """
                         INSERT INTO consentimientos (

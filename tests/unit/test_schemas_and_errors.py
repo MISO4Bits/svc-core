@@ -28,6 +28,8 @@ VALIDO = {
     "primerApellido": "Ríos",
     "fechaNacimiento": "1990-01-01",
     "email": "ana@example.com",
+    "canal": "WEB",
+    "autorizaTratamientoDatos": True,
     "autorizaDatosFinancieros": True,
 }
 

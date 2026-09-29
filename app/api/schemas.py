@@ -40,7 +40,11 @@ class RegistrarClienteRequest(_Model):
     fecha_nacimiento: date
     email: str = Field(max_length=254, pattern=_EMAIL)
     telefono: str | None = Field(default=None, pattern=_TELEFONO)
+    canal: Canal
+    autoriza_tratamiento_datos: bool
+    politica_version_tratamiento_datos: str | None = Field(default=None, max_length=20)
     autoriza_datos_financieros: bool
+    politica_version_datos_financieros: str | None = Field(default=None, max_length=20)
 
 
 class ClienteOut(_Model):

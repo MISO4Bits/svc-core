@@ -47,10 +47,14 @@ class IdentityService:
         primer_apellido: str,
         fecha_nacimiento: date,
         email: str,
+        canal: Canal,
+        autoriza_tratamiento_datos: bool,
         autoriza_datos_financieros: bool,
         segundo_nombre: str | None = None,
         segundo_apellido: str | None = None,
         telefono: str | None = None,
+        politica_version_tratamiento_datos: str | None = None,
+        politica_version_datos_financieros: str | None = None,
     ) -> Cliente:
         if es_desechable(email):
             logger.info("registrar_cliente: dominio de correo desechable")
@@ -78,17 +82,37 @@ class IdentityService:
             segundo_apellido=segundo_apellido,
             telefono=telefono,
         )
-        consentimiento = Consentimiento(
-            cliente_id=cliente.id,
-            scope=ConsentimientoScope.OPEN_FINANCE,
-            estado=(
-                EstadoConsentimiento.OTORGADO
-                if autoriza_datos_financieros
-                else EstadoConsentimiento.NO_OTORGADO
+        consentimientos = [
+            Consentimiento(
+                cliente_id=cliente.id,
+                scope=ConsentimientoScope.OPEN_DATA,
+                estado=(
+                    EstadoConsentimiento.OTORGADO
+                    if autoriza_tratamiento_datos
+                    else EstadoConsentimiento.NO_OTORGADO
+                ),
+                politica_version=(
+                    politica_version_tratamiento_datos if autoriza_tratamiento_datos else None
+                ),
+                canal=canal,
+                otorgado_en=now_utc() if autoriza_tratamiento_datos else None,
             ),
-            otorgado_en=now_utc() if autoriza_datos_financieros else None,
-        )
-        creado = await self._clientes.crear_con_consentimiento(cliente, consentimiento)
+            Consentimiento(
+                cliente_id=cliente.id,
+                scope=ConsentimientoScope.OPEN_FINANCE,
+                estado=(
+                    EstadoConsentimiento.OTORGADO
+                    if autoriza_datos_financieros
+                    else EstadoConsentimiento.NO_OTORGADO
+                ),
+                politica_version=(
+                    politica_version_datos_financieros if autoriza_datos_financieros else None
+                ),
+                canal=canal,
+                otorgado_en=now_utc() if autoriza_datos_financieros else None,
+            ),
+        ]
+        creado = await self._clientes.crear_con_consentimientos(cliente, consentimientos)
         await self._events.publish(
             DomainEvent(
                 "ClienteRegistrado",
@@ -98,9 +122,10 @@ class IdentityService:
                     "email": creado.email,
                     "tipoDocumento": str(creado.tipo_documento),
                     "numeroDocumento": creado.numero_documento,
-                    # Perfilamiento decide con este flag si consulta Open Finance
-                    # (BITS-93 AC-8/AC-9) — no encadenado con la cotización, se
-                    # dispara aquí de forma asíncrona.
+                    # Perfilamiento decide con estos flags si consulta Open Data /
+                    # Open Finance (BITS-93 AC-8/AC-9) — no encadenado con la
+                    # cotización, se dispara aquí de forma asíncrona.
+                    "autorizaTratamientoDatos": autoriza_tratamiento_datos,
                     "autorizaDatosFinancieros": autoriza_datos_financieros,
                 },
             )

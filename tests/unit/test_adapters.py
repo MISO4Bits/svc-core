@@ -55,7 +55,7 @@ async def test_memory_cliente_repository_ciclo():
         estado=EstadoConsentimiento.OTORGADO,
     )
 
-    await repo.crear_con_consentimiento(cliente, consentimiento)
+    await repo.crear_con_consentimientos(cliente, [consentimiento])
 
     assert await repo.obtener(cliente.id) == cliente
     assert await repo.obtener("otro") is None
@@ -71,7 +71,7 @@ async def test_memory_cliente_repository_ciclo():
 async def test_memory_cliente_repository_confirmar_es_idempotente():
     repo = InMemoryClienteRepository()
     cliente = _cliente()
-    await repo.crear_con_consentimiento(cliente, None)
+    await repo.crear_con_consentimientos(cliente, [])
 
     confirmado = await repo.confirmar(cliente.id)
     assert confirmado.correo_confirmado is True
@@ -127,9 +127,9 @@ async def test_sqlite_cliente_repository_conflicto(tmp_path):
     await db.init()
     repo = SqliteClienteRepository(db)
 
-    creado = await repo.crear_con_consentimiento(_cliente(), None)
+    creado = await repo.crear_con_consentimientos(_cliente(), [])
     with pytest.raises(ClienteYaExiste):
-        await repo.crear_con_consentimiento(_cliente(identity_ref="sub-2"), None)
+        await repo.crear_con_consentimientos(_cliente(identity_ref="sub-2"), [])
     assert (await repo.obtener_por_identity_ref("sub-1")).id == creado.id
     assert await repo.obtener_por_identity_ref("ausente") is None
     assert await repo.existe_por_correo("ana@example.com") is True
@@ -140,7 +140,7 @@ async def test_sqlite_cliente_repository_confirmar_es_idempotente(tmp_path):
     db = SqliteDatabase(str(tmp_path / "c.db"))
     await db.init()
     repo = SqliteClienteRepository(db)
-    creado = await repo.crear_con_consentimiento(_cliente(), None)
+    creado = await repo.crear_con_consentimientos(_cliente(), [])
     assert creado.correo_confirmado is False
 
     confirmado = await repo.confirmar(creado.id)
@@ -166,7 +166,7 @@ async def test_sqlite_crear_con_consentimiento_persiste_consentimiento(tmp_path)
     cliente = _cliente()
     consentimiento.cliente_id = cliente.id
 
-    await repo.crear_con_consentimiento(cliente, consentimiento)
+    await repo.crear_con_consentimientos(cliente, [consentimiento])
 
     guardado = await SqliteConsentimientoRepository(db).obtener(
         cliente.id, ConsentimientoScope.OPEN_FINANCE

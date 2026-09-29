@@ -110,8 +110,9 @@ async def test_idempotencia_no_duplica(client, app):
 
 
 async def test_ciclo_de_consentimiento(client):
-    # OPEN_DATA porque OPEN_FINANCE ya queda creado desde el registro unificado
-    # (BITS-93) cuando autorizaDatosFinancieros=True, como en CLIENTE_VALIDO.
+    # El registro unificado (BITS-93) ya crea OPEN_DATA y OPEN_FINANCE en
+    # version 1 (CLIENTE_VALIDO autoriza ambos), así que otorgar de nuevo
+    # parte de ahí, no de version 1.
     cliente_id = (await client.post("/clientes", json=CLIENTE_VALIDO)).json()["id"]
     ruta = f"/clientes/{cliente_id}/consentimientos"
 
@@ -119,12 +120,12 @@ async def test_ciclo_de_consentimiento(client):
         ruta, json={"scope": "OPEN_DATA", "politicaVersion": "v1", "canal": "WEB"}
     )
     assert v1.status_code == 201
-    assert v1.json()["version"] == 1
+    assert v1.json()["version"] == 2
 
     v2 = await client.post(
         ruta, json={"scope": "OPEN_DATA", "politicaVersion": "v2", "canal": "WEB"}
     )
-    assert v2.json()["version"] == 2
+    assert v2.json()["version"] == 3
 
     listado = await client.get(ruta)
     assert listado.status_code == 200

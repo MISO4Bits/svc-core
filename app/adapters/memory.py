@@ -12,14 +12,15 @@ class InMemoryClienteRepository:
         self._emails: set[str] = set()
         self._consentimientos = consentimientos
 
-    async def crear_con_consentimiento(
-        self, cliente: Cliente, consentimiento: Consentimiento | None
+    async def crear_con_consentimientos(
+        self, cliente: Cliente, consentimientos: list[Consentimiento]
     ) -> Cliente:
         self._by_id[cliente.id] = cliente
         self._docs.add((str(cliente.tipo_documento), cliente.numero_documento))
         self._emails.add(cliente.email)
-        if consentimiento is not None and self._consentimientos is not None:
-            await self._consentimientos.guardar(consentimiento)
+        if self._consentimientos is not None:
+            for consentimiento in consentimientos:
+                await self._consentimientos.guardar(consentimiento)
         return cliente
 
     async def obtener(self, cliente_id: str) -> Cliente | None:

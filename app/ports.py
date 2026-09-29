@@ -9,10 +9,10 @@ from app.domain import Cliente, Consentimiento, ConsentimientoScope, DomainEvent
 
 @runtime_checkable
 class ClienteRepository(Protocol):
-    async def crear_con_consentimiento(
-        self, cliente: Cliente, consentimiento: Consentimiento | None
+    async def crear_con_consentimientos(
+        self, cliente: Cliente, consentimientos: list[Consentimiento]
     ) -> Cliente:
-        """Crea el cliente y, si viene, el consentimiento OPEN_FINANCE de forma atómica."""
+        """Crea el cliente y sus consentimientos (OPEN_DATA, OPEN_FINANCE) atómicamente."""
         ...
 
     async def obtener(self, cliente_id: str) -> Cliente | None: ...
