@@ -13,11 +13,13 @@ from app.domain import (
     Consentimiento,
     ConsentimientoNoEncontrado,
     ConsentimientoScope,
+    CorreoDesechable,
     DomainEvent,
     EstadoConsentimiento,
     TipoDocumento,
     now_utc,
 )
+from app.dominios_desechables import es_desechable
 from app.logging_utils import sanear_para_log
 from app.ports import ClienteRepository, ConsentimientoRepository, EventPublisher
 
@@ -45,14 +47,28 @@ class IdentityService:
         primer_apellido: str,
         fecha_nacimiento: date,
         email: str,
+        canal: Canal,
+        autoriza_tratamiento_datos: bool,
+        autoriza_datos_financieros: bool,
         segundo_nombre: str | None = None,
         segundo_apellido: str | None = None,
         telefono: str | None = None,
+        politica_version_tratamiento_datos: str | None = None,
+        politica_version_datos_financieros: str | None = None,
     ) -> Cliente:
+        if es_desechable(email):
+            logger.info("registrar_cliente: dominio de correo desechable")
+            raise CorreoDesechable(email)
+
+        logger.info("registrar_cliente: verificando correo existente")
+        if await self._clientes.existe_por_correo(email):
+            logger.info("registrar_cliente: correo ya registrado")
+            raise ClienteYaExiste(tipo_documento, numero_documento, campo="correo")
+
         logger.info("registrar_cliente: verificando documento existente")
         if await self._clientes.existe_por_documento(tipo_documento, numero_documento):
             logger.info("registrar_cliente: documento ya registrado")
-            raise ClienteYaExiste(tipo_documento, numero_documento)
+            raise ClienteYaExiste(tipo_documento, numero_documento, campo="documento")
 
         cliente = Cliente(
             identity_ref=identity_ref,
@@ -66,7 +82,37 @@ class IdentityService:
             segundo_apellido=segundo_apellido,
             telefono=telefono,
         )
-        creado = await self._clientes.crear(cliente)
+        consentimientos = [
+            Consentimiento(
+                cliente_id=cliente.id,
+                scope=ConsentimientoScope.OPEN_DATA,
+                estado=(
+                    EstadoConsentimiento.OTORGADO
+                    if autoriza_tratamiento_datos
+                    else EstadoConsentimiento.NO_OTORGADO
+                ),
+                politica_version=(
+                    politica_version_tratamiento_datos if autoriza_tratamiento_datos else None
+                ),
+                canal=canal,
+                otorgado_en=now_utc() if autoriza_tratamiento_datos else None,
+            ),
+            Consentimiento(
+                cliente_id=cliente.id,
+                scope=ConsentimientoScope.OPEN_FINANCE,
+                estado=(
+                    EstadoConsentimiento.OTORGADO
+                    if autoriza_datos_financieros
+                    else EstadoConsentimiento.NO_OTORGADO
+                ),
+                politica_version=(
+                    politica_version_datos_financieros if autoriza_datos_financieros else None
+                ),
+                canal=canal,
+                otorgado_en=now_utc() if autoriza_datos_financieros else None,
+            ),
+        ]
+        creado = await self._clientes.crear_con_consentimientos(cliente, consentimientos)
         await self._events.publish(
             DomainEvent(
                 "ClienteRegistrado",
@@ -74,6 +120,13 @@ class IdentityService:
                     "clienteId": creado.id,
                     "identityRef": creado.identity_ref,
                     "email": creado.email,
+                    "tipoDocumento": str(creado.tipo_documento),
+                    "numeroDocumento": creado.numero_documento,
+                    # Perfilamiento decide con estos flags si consulta Open Data /
+                    # Open Finance (BITS-93 AC-8/AC-9) — no encadenado con la
+                    # cotización, se dispara aquí de forma asíncrona.
+                    "autorizaTratamientoDatos": autoriza_tratamiento_datos,
+                    "autorizaDatosFinancieros": autoriza_datos_financieros,
                 },
             )
         )
@@ -91,6 +144,30 @@ class IdentityService:
         if cliente is None:
             raise ClienteNoEncontrado(identity_ref)
         return cliente
+
+    async def existe_cliente(
+        self,
+        *,
+        email: str | None = None,
+        tipo_documento: TipoDocumento | None = None,
+        numero_documento: str | None = None,
+    ) -> dict[str, bool | None]:
+        correo_disponible = None
+        if email is not None:
+            correo_disponible = not await self._clientes.existe_por_correo(email)
+        documento_disponible = None
+        if tipo_documento is not None and numero_documento is not None:
+            documento_disponible = not await self._clientes.existe_por_documento(
+                tipo_documento, numero_documento
+            )
+        return {"correoDisponible": correo_disponible, "documentoDisponible": documento_disponible}
+
+    async def confirmar_cliente(self, cliente_id: str) -> Cliente:
+        await self.obtener_cliente(cliente_id)
+        confirmado = await self._clientes.confirmar(cliente_id)
+        assert confirmado is not None  # ya validamos que existe arriba
+        logger.info("confirmar_cliente: cliente_id=%s", sanear_para_log(cliente_id))
+        return confirmado
 
     async def listar_consentimientos(self, cliente_id: str) -> list[Consentimiento]:
         await self.obtener_cliente(cliente_id)

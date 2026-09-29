@@ -9,13 +9,23 @@ from app.domain import Cliente, Consentimiento, ConsentimientoScope, DomainEvent
 
 @runtime_checkable
 class ClienteRepository(Protocol):
-    async def crear(self, cliente: Cliente) -> Cliente: ...
+    async def crear_con_consentimientos(
+        self, cliente: Cliente, consentimientos: list[Consentimiento]
+    ) -> Cliente:
+        """Crea el cliente y sus consentimientos (OPEN_DATA, OPEN_FINANCE) atómicamente."""
+        ...
 
     async def obtener(self, cliente_id: str) -> Cliente | None: ...
 
     async def obtener_por_identity_ref(self, identity_ref: str) -> Cliente | None: ...
 
     async def existe_por_documento(self, tipo_documento: str, numero_documento: str) -> bool: ...
+
+    async def existe_por_correo(self, email: str) -> bool: ...
+
+    async def confirmar(self, cliente_id: str) -> Cliente | None:
+        """Idempotente: si ya estaba confirmado, no toca ``confirmado_en`` de nuevo."""
+        ...
 
 
 @runtime_checkable

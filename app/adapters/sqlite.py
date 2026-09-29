@@ -42,9 +42,12 @@ CREATE TABLE IF NOT EXISTS clientes (
     email TEXT NOT NULL,
     telefono TEXT,
     estado TEXT NOT NULL,
+    correo_confirmado INTEGER NOT NULL DEFAULT 0,
+    confirmado_en TEXT,
     creado_en TEXT NOT NULL,
     actualizado_en TEXT,
-    UNIQUE (tipo_documento, numero_documento)
+    UNIQUE (tipo_documento, numero_documento),
+    UNIQUE (email)
 );
 CREATE TABLE IF NOT EXISTS consentimientos (
     cliente_id TEXT NOT NULL,
@@ -81,6 +84,19 @@ class SqliteDatabase:
     async def init(self) -> None:
         async with self.connect() as conn:
             await conn.executescript(_SCHEMA)
+            # Migración manual para bases de dev creadas antes de BITS-93: SQLite
+            # no soporta "ADD COLUMN IF NOT EXISTS", así que se intenta y se
+            # ignora el error si la columna ya existe. No agrega el UNIQUE(email)
+            # a tablas viejas — eso solo aplica a bases nuevas (ver openapi.yaml,
+            # Cliente, nota de limitación conocida del backend de dev).
+            for ddl in (
+                "ALTER TABLE clientes ADD COLUMN correo_confirmado INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE clientes ADD COLUMN confirmado_en TEXT",
+            ):
+                try:
+                    await conn.execute(ddl)
+                except aiosqlite.OperationalError:
+                    pass
             await conn.commit()
 
     @asynccontextmanager
@@ -107,6 +123,8 @@ def _row_to_cliente(row: aiosqlite.Row) -> Cliente:
         email=row["email"],
         telefono=row["telefono"],
         estado=EstadoCliente(row["estado"]),
+        correo_confirmado=bool(row["correo_confirmado"]),
+        confirmado_en=_dt(row["confirmado_en"]),
         creado_en=_dt(row["creado_en"]),
         actualizado_en=_dt(row["actualizado_en"]),
     )
@@ -130,7 +148,9 @@ class SqliteClienteRepository:
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
 
-    async def crear(self, cliente: Cliente) -> Cliente:
+    async def crear_con_consentimientos(
+        self, cliente: Cliente, consentimientos: list[Consentimiento]
+    ) -> Cliente:
         async with self._db.connect() as conn:
             try:
                 await conn.execute(
@@ -138,8 +158,9 @@ class SqliteClienteRepository:
                     INSERT INTO clientes (
                         id, identity_ref, tipo_documento, numero_documento,
                         primer_nombre, segundo_nombre, primer_apellido, segundo_apellido,
-                        fecha_nacimiento, email, telefono, estado, creado_en, actualizado_en
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        fecha_nacimiento, email, telefono, estado, correo_confirmado,
+                        confirmado_en, creado_en, actualizado_en
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         cliente.id,
@@ -154,14 +175,42 @@ class SqliteClienteRepository:
                         cliente.email,
                         cliente.telefono,
                         str(cliente.estado),
+                        int(cliente.correo_confirmado),
+                        _iso(cliente.confirmado_en),
                         _iso(cliente.creado_en),
                         _iso(cliente.actualizado_en),
                     ),
                 )
+                for consentimiento in consentimientos:
+                    await conn.execute(
+                        """
+                        INSERT INTO consentimientos (
+                            cliente_id, scope, estado, version, politica_version,
+                            canal, otorgado_en, revocado_en, actualizado_en
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            consentimiento.cliente_id,
+                            str(consentimiento.scope),
+                            str(consentimiento.estado),
+                            consentimiento.version,
+                            consentimiento.politica_version,
+                            str(consentimiento.canal) if consentimiento.canal else None,
+                            _iso(consentimiento.otorgado_en),
+                            _iso(consentimiento.revocado_en),
+                            _iso(consentimiento.actualizado_en),
+                        ),
+                    )
                 await conn.commit()
             except aiosqlite.IntegrityError as exc:
-                logger.info("sqlite: documento ya registrado (conflicto de unicidad)")
-                raise ClienteYaExiste(cliente.tipo_documento, cliente.numero_documento) from exc
+                # El chequeo de unicidad ya se hizo en la capa de servicio antes
+                # de llegar aquí; esto solo cubre la condición de carrera. El
+                # mensaje de SQLite indica qué columna violó el UNIQUE.
+                campo = "correo" if "email" in str(exc) else "documento"
+                logger.info("sqlite: conflicto de unicidad campo=%s", campo)
+                raise ClienteYaExiste(
+                    cliente.tipo_documento, cliente.numero_documento, campo=campo
+                ) from exc
         logger.info("sqlite: cliente creado cliente_id=%s", cliente.id)
         return cliente
 
@@ -186,6 +235,25 @@ class SqliteClienteRepository:
                 (str(tipo_documento), numero_documento),
             )
             return await cursor.fetchone() is not None
+
+    async def existe_por_correo(self, email: str) -> bool:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute("SELECT 1 FROM clientes WHERE email = ?", (email,))
+            return await cursor.fetchone() is not None
+
+    async def confirmar(self, cliente_id: str) -> Cliente | None:
+        async with self._db.connect() as conn:
+            await conn.execute(
+                """
+                UPDATE clientes SET correo_confirmado = 1, confirmado_en = ?
+                WHERE id = ? AND correo_confirmado = 0
+                """,
+                (_iso(now_utc()), cliente_id),
+            )
+            await conn.commit()
+            cursor = await conn.execute("SELECT * FROM clientes WHERE id = ?", (cliente_id,))
+            row = await cursor.fetchone()
+        return _row_to_cliente(row) if row else None
 
 
 class SqliteConsentimientoRepository:

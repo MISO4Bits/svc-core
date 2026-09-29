@@ -46,7 +46,13 @@ def problema(
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ClienteYaExiste)
     async def _ya_existe(request: Request, exc: ClienteYaExiste) -> JSONResponse:
-        return problema(409, "El cliente ya existe", detail=str(exc), instance=str(request.url))
+        return problema(
+            409,
+            "El cliente ya existe",
+            detail=str(exc),
+            instance=str(request.url),
+            errores=[{"campo": exc.campo, "mensaje": str(exc)}],
+        )
 
     @app.exception_handler(ClienteNoEncontrado)
     async def _cliente_no_encontrado(request: Request, exc: ClienteNoEncontrado) -> JSONResponse:

@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 
 def now_utc() -> datetime:
@@ -63,6 +63,8 @@ class Cliente:
     segundo_apellido: str | None = None
     telefono: str | None = None
     estado: EstadoCliente = EstadoCliente.ACTIVO
+    correo_confirmado: bool = False
+    confirmado_en: datetime | None = None
     id: str = field(default_factory=new_id)
     creado_en: datetime = field(default_factory=now_utc)
     actualizado_en: datetime | None = None
@@ -99,10 +101,23 @@ class DomainError(Exception):
 
 
 class ClienteYaExiste(DomainError):
-    def __init__(self, tipo_documento: str, numero_documento: str) -> None:
+    def __init__(
+        self,
+        tipo_documento: str,
+        numero_documento: str,
+        *,
+        campo: Literal["documento", "correo"] = "documento",
+    ) -> None:
         super().__init__(f"Ya existe un cliente para {tipo_documento} {numero_documento}")
         self.tipo_documento = str(tipo_documento)
         self.numero_documento = numero_documento
+        self.campo = campo
+
+
+class CorreoDesechable(DomainError):
+    def __init__(self, email: str) -> None:
+        super().__init__("El dominio del correo no admite registro (correo desechable)")
+        self.email = email
 
 
 class ClienteNoEncontrado(DomainError):

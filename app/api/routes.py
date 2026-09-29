@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from app.api.schemas import (
     ClienteOut,
     ConsentimientoOut,
+    DisponibilidadOut,
     EstadoConsentimientoOut,
     OtorgarConsentimientoRequest,
     RegistrarClienteRequest,
 )
-from app.domain import ConsentimientoScope
+from app.domain import ConsentimientoScope, TipoDocumento
 from app.logging_utils import sanear_para_log
 from app.ports import IdempotencyStore
 from app.services import IdentityService
@@ -62,9 +63,14 @@ async def registrar_cliente(
         primer_apellido=payload.primer_apellido,
         fecha_nacimiento=payload.fecha_nacimiento,
         email=payload.email,
+        canal=payload.canal,
+        autoriza_tratamiento_datos=payload.autoriza_tratamiento_datos,
+        autoriza_datos_financieros=payload.autoriza_datos_financieros,
         segundo_nombre=payload.segundo_nombre,
         segundo_apellido=payload.segundo_apellido,
         telefono=payload.telefono,
+        politica_version_tratamiento_datos=payload.politica_version_tratamiento_datos,
+        politica_version_datos_financieros=payload.politica_version_datos_financieros,
     )
     out = ClienteOut.model_validate(cliente)
     response.headers["Location"] = f"/clientes/{cliente.id}"
@@ -90,10 +96,33 @@ async def buscar_cliente_por_identidad(
     return ClienteOut.model_validate(cliente)
 
 
+@router.get("/clientes/disponibilidad", response_model=DisponibilidadOut, tags=["Clientes"])
+async def consultar_disponibilidad(
+    service: ServiceDep,
+    correo: Annotated[str | None, Query(max_length=254)] = None,
+    tipo_documento: Annotated[TipoDocumento | None, Query(alias="tipoDocumento")] = None,
+    numero_documento: Annotated[
+        str | None, Query(alias="numeroDocumento", min_length=4, max_length=20)
+    ] = None,
+) -> DisponibilidadOut:
+    logger.info("GET /clientes/disponibilidad: solicitud recibida")
+    resultado = await service.existe_cliente(
+        email=correo, tipo_documento=tipo_documento, numero_documento=numero_documento
+    )
+    return DisponibilidadOut.model_validate(resultado)
+
+
 @router.get("/clientes/{cliente_id}", response_model=ClienteOut, tags=["Clientes"])
 async def obtener_cliente(cliente_id: str, service: ServiceDep) -> ClienteOut:
     logger.info("GET /clientes/%s: solicitud recibida", sanear_para_log(cliente_id))
     cliente = await service.obtener_cliente(cliente_id)
+    return ClienteOut.model_validate(cliente)
+
+
+@router.post("/clientes/{cliente_id}/confirmacion", response_model=ClienteOut, tags=["Clientes"])
+async def confirmar_cliente(cliente_id: str, service: ServiceDep) -> ClienteOut:
+    logger.info("POST /clientes/%s/confirmacion: solicitud recibida", sanear_para_log(cliente_id))
+    cliente = await service.confirmar_cliente(cliente_id)
     return ClienteOut.model_validate(cliente)
 
 
