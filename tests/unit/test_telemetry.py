@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 
+import opentelemetry.metrics._internal as otel_metrics_internal
+import opentelemetry.trace as otel_trace_module
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.semconv._incubating.attributes import code_attributes
+from opentelemetry.util._once import Once
 
 from app.config import Settings
 from app.telemetry import (
@@ -25,18 +28,27 @@ def _settings(**overrides) -> Settings:
 
 @pytest.fixture(autouse=True)
 def _contexto_otel_limpio():
-    """Adjuntar un ``Context()`` vacío antes de cada test y desacoplarlo al
-    terminar. Un "span activo" es, en el fondo, una entrada en un
-    ``contextvars.ContextVar`` de proceso — si algo (el propio SDK, un
-    exportador en background, una instrumentación que no cerró su span en el
-    orden esperado) deja esa entrada puesta, el próximo test la hereda sin
-    haber hecho nada para merecerla. No se pudo aislar con certeza *qué* la
-    deja puesta (a diferencia de bff-web, este repo no usa
-    ``HTTPXClientInstrumentor``, el sospechoso ahí) — en vez de perseguir el
-    mecanismo exacto, se limpia el efecto directamente: es el patrón que
-    recomienda el propio proyecto OpenTelemetry Python para aislar pruebas
-    entre sí, y no depende de adivinar la causa río arriba.
+    """Causa raíz confirmada en CI (no reproducible en local, ver commits
+    anteriores de este mismo fix): ``opentelemetry.trace`` y
+    ``opentelemetry.metrics`` guardan el ``TracerProvider``/``MeterProvider``
+    "activo" en variables de módulo protegidas por un ``Once()`` — solo se
+    pueden fijar una vez por *proceso completo*, no una vez por test. El
+    warning real de CI, "A shutdown `MeterProvider` can not provide a
+    `Meter`", lo prueba sin ambigüedad: un test que llama de nuevo
+    ``setup_telemetry(otel_enabled=True)`` después del primero NO logra que
+    su propio ``MeterProvider`` quede activo — sigue instrumentando contra el
+    del primer test, ya apagado (``FastAPIInstrumentor.instrument_app`` en
+    ``app/telemetry.py`` nunca pasa ``meter_provider=meter_provider``
+    explícito, así que cae al global). Correr pruebas que hacen
+    ``setup``/``shutdown_telemetry`` repetidas veces en el mismo proceso no
+    es el escenario que la propia API de OpenTelemetry soporta — por eso no
+    alcanzaba con limpiar el contexto del span (fix anterior): había que
+    resetear también el "ya fijado" de los providers, no solo el span activo.
     """
+    otel_trace_module._TRACER_PROVIDER = None
+    otel_trace_module._TRACER_PROVIDER_SET_ONCE = Once()
+    otel_metrics_internal._METER_PROVIDER = None
+    otel_metrics_internal._METER_PROVIDER_SET_ONCE = Once()
     token = otel_context.attach(otel_context.Context())
     try:
         yield
