@@ -5,6 +5,7 @@ import logging
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.semconv._incubating.attributes import code_attributes
 
@@ -20,6 +21,27 @@ from app.telemetry import (
 
 def _settings(**overrides) -> Settings:
     return Settings(**overrides)
+
+
+@pytest.fixture(autouse=True)
+def _contexto_otel_limpio():
+    """Adjuntar un ``Context()`` vacío antes de cada test y desacoplarlo al
+    terminar. Un "span activo" es, en el fondo, una entrada en un
+    ``contextvars.ContextVar`` de proceso — si algo (el propio SDK, un
+    exportador en background, una instrumentación que no cerró su span en el
+    orden esperado) deja esa entrada puesta, el próximo test la hereda sin
+    haber hecho nada para merecerla. No se pudo aislar con certeza *qué* la
+    deja puesta (a diferencia de bff-web, este repo no usa
+    ``HTTPXClientInstrumentor``, el sospechoso ahí) — en vez de perseguir el
+    mecanismo exacto, se limpia el efecto directamente: es el patrón que
+    recomienda el propio proyecto OpenTelemetry Python para aislar pruebas
+    entre sí, y no depende de adivinar la causa río arriba.
+    """
+    token = otel_context.attach(otel_context.Context())
+    try:
+        yield
+    finally:
+        otel_context.detach(token)
 
 
 @pytest.fixture
