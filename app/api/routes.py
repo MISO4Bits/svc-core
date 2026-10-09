@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, Request, Response, status
+from opentelemetry import context as otel_context
 
 from app.api.schemas import (
     ClienteOut,
@@ -15,6 +16,7 @@ from app.api.schemas import (
 )
 from app.domain import ConsentimientoScope, TipoDocumento
 from app.logging_utils import sanear_para_log
+from app.notificaciones import ejecutar_con_contexto
 from app.ports import IdempotencyStore
 from app.services import IdentityService
 
@@ -42,6 +44,8 @@ IdempotencyDep = Annotated[IdempotencyStore, Depends(get_idempotency)]
 )
 async def registrar_cliente(
     payload: RegistrarClienteRequest,
+    request: Request,
+    background: BackgroundTasks,
     service: ServiceDep,
     idempotency: IdempotencyDep,
     response: Response,
@@ -74,6 +78,17 @@ async def registrar_cliente(
     )
     out = ClienteOut.model_validate(cliente)
     response.headers["Location"] = f"/clientes/{cliente.id}"
+
+    # Bienvenida y verificación salen después de responder y sin afectar el alta;
+    # conservan el trace_id de esta petición.
+    notificaciones = request.app.state.notificaciones
+    if notificaciones is not None:
+        background.add_task(
+            ejecutar_con_contexto,
+            otel_context.get_current(),
+            notificaciones.enviar_correos_del_registro,
+            cliente,
+        )
 
     if idempotency_key:
         await idempotency.put(

@@ -28,10 +28,17 @@ VALIDO = {
     "primerApellido": "Ríos",
     "fechaNacimiento": "1990-01-01",
     "email": "ana@example.com",
+    "telefono": "+573001234567",
     "canal": "WEB",
     "autorizaTratamientoDatos": True,
     "autorizaDatosFinancieros": True,
 }
+
+
+def test_registrar_request_exige_telefono():
+    sin_telefono = {k: v for k, v in VALIDO.items() if k != "telefono"}
+    with pytest.raises(ValidationError):
+        RegistrarClienteRequest.model_validate(sin_telefono)
 
 
 def test_registrar_request_acepta_camel_case():
@@ -63,10 +70,12 @@ def test_cliente_out_serializa_en_camel_case():
         primer_apellido="Ríos",
         fecha_nacimiento=date(1990, 1, 1),
         email="ana@example.com",
+        telefono="+573001234567",
         creado_en=datetime(2026, 1, 1, tzinfo=UTC),
     )
     data = ClienteOut.model_validate(dominio).model_dump(mode="json", by_alias=True)
     assert data["identityRef"] == "sub-1"
+    assert data["telefono"] == "+573001234567"
     assert data["numeroDocumento"] == "123456"
     assert data["creadoEn"].startswith("2026-01-01")
 

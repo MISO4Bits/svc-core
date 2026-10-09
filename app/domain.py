@@ -59,9 +59,9 @@ class Cliente:
     primer_apellido: str
     fecha_nacimiento: date
     email: str
+    telefono: str
     segundo_nombre: str | None = None
     segundo_apellido: str | None = None
-    telefono: str | None = None
     estado: EstadoCliente = EstadoCliente.ACTIVO
     correo_confirmado: bool = False
     confirmado_en: datetime | None = None
@@ -94,6 +94,26 @@ class DomainEvent:
     datos: dict[str, Any]
     id: str = field(default_factory=new_id)
     ocurrido_en: datetime = field(default_factory=now_utc)
+
+
+class TipoCorreo(StrEnum):
+    BIENVENIDA = "bienvenida"
+    VERIFICACION_CORREO = "verificacion-correo"
+
+
+@dataclass(frozen=True)
+class PlantillaCorreo:
+    """Plantilla tal cual la publica Productos y Configuración de Mercado (sin rellenar)."""
+
+    tipo: str
+    version: str
+    asunto: str
+    cuerpo_html: str
+    cuerpo_texto: str
+
+
+class NotificacionError(Exception):
+    """No se pudo preparar o publicar un correo. Nunca llega al cliente del registro."""
 
 
 class DomainError(Exception):

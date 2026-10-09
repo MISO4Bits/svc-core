@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.domain import Cliente, Consentimiento, ConsentimientoScope, DomainEvent
+from app.domain import (
+    Cliente,
+    Consentimiento,
+    ConsentimientoScope,
+    DomainEvent,
+    PlantillaCorreo,
+    TipoCorreo,
+)
 
 
 @runtime_checkable
@@ -49,3 +56,18 @@ class IdempotencyStore(Protocol):
 @runtime_checkable
 class EventPublisher(Protocol):
     async def publish(self, event: DomainEvent) -> None: ...
+
+
+@runtime_checkable
+class PlantillasCorreoPort(Protocol):
+    async def obtener_vigente(self, tipo: TipoCorreo, mercado: str, idioma: str) -> PlantillaCorreo:
+        """Plantilla vigente (sin rellenar). Lanza ``NotificacionError`` si no la obtiene."""
+        ...
+
+
+@runtime_checkable
+class IdentidadAdminPort(Protocol):
+    async def generar_codigo_verificacion(self, email: str) -> str:
+        """Pide a Identity Platform un código de un solo uso para verificar ese correo.
+        Lanza ``NotificacionError`` si no lo obtiene."""
+        ...

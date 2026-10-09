@@ -5,6 +5,13 @@ from __future__ import annotations
 from tests.conftest import CLIENTE_VALIDO
 
 
+async def test_registro_sin_telefono_devuelve_400(client):
+    sin_telefono = {k: v for k, v in CLIENTE_VALIDO.items() if k != "telefono"}
+    respuesta = await client.post("/clientes", json=sin_telefono)
+    assert respuesta.status_code == 400
+    assert any(e["campo"].endswith("telefono") for e in respuesta.json()["errores"])
+
+
 async def test_registro_y_consulta(client, app):
     creado = await client.post("/clientes", json=CLIENTE_VALIDO)
     assert creado.status_code == 201

@@ -85,6 +85,12 @@ paths:
         Publica el evento de dominio `ClienteRegistrado` (incluye el resultado del
         consentimiento financiero, lo consume Perfilamiento para decidir si consulta
         Open Finance).
+
+        Tras responder, en segundo plano y sin afectar esta respuesta, prepara los
+        correos de **bienvenida** y de **verificación de correo** (plantilla de
+        Productos rellenada con los datos del cliente y el enlace a la web) y los
+        publica como eventos `EnviarCorreo` para la función `fn-notificaciones`.
+        Si algo de eso falla, el registro queda igual; el fallo solo se registra.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -318,7 +324,7 @@ components:
     RegistrarClienteRequest:
       type: object
       additionalProperties: false
-      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, canal, autorizaTratamientoDatos, autorizaDatosFinancieros]
+      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, telefono, canal, autorizaTratamientoDatos, autorizaDatosFinancieros]
       properties:
         identityRef:
           type: string
@@ -341,8 +347,9 @@ components:
         fechaNacimiento: { type: string, format: date }
         email: { type: string, format: email, maxLength: 254 }
         telefono:
-          type: [string, 'null']
+          type: string
           pattern: '^\+?[0-9]{7,15}$'
+          description: Celular de contacto (obligatorio desde BITS-93).
         canal:
           $ref: '#/components/schemas/Canal'
           description: Canal desde el que se registra, para el consentimiento (igual que en otorgarConsentimiento).
@@ -369,7 +376,7 @@ components:
     Cliente:
       type: object
       additionalProperties: false
-      required: [id, identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, estado, correoConfirmado, creadoEn]
+      required: [id, identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, telefono, estado, correoConfirmado, creadoEn]
       properties:
         id: { type: string, format: uuid }
         identityRef: { type: string }
@@ -381,7 +388,7 @@ components:
         segundoApellido: { type: [string, 'null'] }
         fechaNacimiento: { type: string, format: date }
         email: { type: string, format: email }
-        telefono: { type: [string, 'null'] }
+        telefono: { type: string }
         estado: { $ref: '#/components/schemas/EstadoCliente' }
         correoConfirmado:
           type: boolean

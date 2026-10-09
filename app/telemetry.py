@@ -19,6 +19,7 @@ from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
@@ -129,6 +130,9 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> Telemetry | None:
     FastAPIInstrumentor.instrument_app(
         app, tracer_provider=tracer_provider, excluded_urls="/health"
     )
+    # Las llamadas salientes (hacia Productos) llevan el ``traceparent``: el correo
+    # del registro queda en el mismo trace que la petición que lo originó.
+    HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
 
     return tracer_provider, meter_provider, logger_provider
 
