@@ -39,7 +39,7 @@ class RegistrarClienteRequest(_Model):
     segundo_apellido: str | None = Field(default=None, max_length=60)
     fecha_nacimiento: date
     email: str = Field(max_length=254, pattern=_EMAIL)
-    telefono: str | None = Field(default=None, pattern=_TELEFONO)
+    telefono: str = Field(pattern=_TELEFONO)
     canal: Canal
     autoriza_tratamiento_datos: bool
     politica_version_tratamiento_datos: str | None = Field(default=None, max_length=20)

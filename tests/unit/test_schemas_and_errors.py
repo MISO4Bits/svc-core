@@ -28,10 +28,17 @@ VALIDO = {
     "primerApellido": "Ríos",
     "fechaNacimiento": "1990-01-01",
     "email": "ana@example.com",
+    "telefono": "+573001234567",
     "canal": "WEB",
     "autorizaTratamientoDatos": True,
     "autorizaDatosFinancieros": True,
 }
+
+
+def test_registrar_request_exige_telefono():
+    sin_telefono = {k: v for k, v in VALIDO.items() if k != "telefono"}
+    with pytest.raises(ValidationError):
+        RegistrarClienteRequest.model_validate(sin_telefono)
 
 
 def test_registrar_request_acepta_camel_case():

@@ -318,7 +318,7 @@ components:
     RegistrarClienteRequest:
       type: object
       additionalProperties: false
-      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, canal, autorizaTratamientoDatos, autorizaDatosFinancieros]
+      required: [identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, telefono, canal, autorizaTratamientoDatos, autorizaDatosFinancieros]
       properties:
         identityRef:
           type: string
@@ -341,8 +341,9 @@ components:
         fechaNacimiento: { type: string, format: date }
         email: { type: string, format: email, maxLength: 254 }
         telefono:
-          type: [string, 'null']
+          type: string
           pattern: '^\+?[0-9]{7,15}$'
+          description: Celular de contacto (obligatorio desde BITS-93).
         canal:
           $ref: '#/components/schemas/Canal'
           description: Canal desde el que se registra, para el consentimiento (igual que en otorgarConsentimiento).

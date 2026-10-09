@@ -30,6 +30,7 @@ DATOS = dict(
     primer_apellido="Ríos",
     fecha_nacimiento=date(1990, 1, 1),
     email="ana@example.com",
+    telefono="+573001234567",
     canal=Canal.WEB,
     autoriza_tratamiento_datos=True,
     autoriza_datos_financieros=True,
