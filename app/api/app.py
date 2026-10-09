@@ -7,7 +7,12 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from app.adapters.factory import build_event_publisher, build_repositories, maybe_init
+from app.adapters.factory import (
+    build_event_publisher,
+    build_notificaciones,
+    build_repositories,
+    maybe_init,
+)
 from app.api.errors import install_error_handlers
 from app.api.routes import router
 from app.config import Settings, get_settings
@@ -26,12 +31,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     clientes, consentimientos, idempotency = build_repositories(settings)
     events = build_event_publisher(settings)
     service = IdentityService(clientes, consentimientos, events)
+    notificaciones, cerrables = build_notificaciones(settings, events)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         for adapter in (clientes, consentimientos, idempotency):
             await maybe_init(adapter)
         yield
+        for adaptador in cerrables:
+            await adaptador.aclose()
         shutdown_telemetry(telemetry)
 
     app = FastAPI(
@@ -47,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.consentimientos = consentimientos
     app.state.idempotency = idempotency
     app.state.events = events
+    app.state.notificaciones = notificaciones
 
     install_error_handlers(app)
     app.include_router(router)

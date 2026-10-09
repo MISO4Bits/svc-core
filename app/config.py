@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     pubsub_project_id: str | None = None
     pubsub_topic: str = "solventa-dominio"
 
+    # Correos del registro (bienvenida y verificación de correo): Core arma el
+    # mensaje (plantilla de Productos + datos del cliente) y lo publica como
+    # evento "EnviarCorreo"; la función fn-notificaciones solo lo envía.
+    # "off" (no envía nada) | "fake" (dobles locales) | "real" (Productos + Identity Platform)
+    notificaciones_backend: str = "off"
+    productos_base_url: str = "http://svc-productos.svc-productos.svc.cluster.local"
+    productos_timeout_s: float = 2.0
+    identity_project_id: str | None = None
+    # URLs de la web que van dentro del correo (sin barra final en la base).
+    web_url_base: str = "https://solventa4bits.com"
+    web_url_verificacion: str = "https://solventa4bits.com/verificar-correo"
+    correo_mercado: str = "CO"
+    correo_idioma: str = "es-CO"
+
     # Observabilidad (DI-008): OTLP/gRPC hacia Grafana Alloy dentro del
     # cluster. Deshabilitado por defecto — en local/tests no hay receptor
     # escuchando; se habilita vía CORE_OTEL_ENABLED=true en el manifiesto de

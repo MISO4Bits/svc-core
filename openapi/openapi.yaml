@@ -85,6 +85,12 @@ paths:
         Publica el evento de dominio `ClienteRegistrado` (incluye el resultado del
         consentimiento financiero, lo consume Perfilamiento para decidir si consulta
         Open Finance).
+
+        Tras responder, en segundo plano y sin afectar esta respuesta, prepara los
+        correos de **bienvenida** y de **verificación de correo** (plantilla de
+        Productos rellenada con los datos del cliente y el enlace a la web) y los
+        publica como eventos `EnviarCorreo` para la función `fn-notificaciones`.
+        Si algo de eso falla, el registro queda igual; el fallo solo se registra.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:

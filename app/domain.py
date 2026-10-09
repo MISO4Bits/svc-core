@@ -96,6 +96,26 @@ class DomainEvent:
     ocurrido_en: datetime = field(default_factory=now_utc)
 
 
+class TipoCorreo(StrEnum):
+    BIENVENIDA = "bienvenida"
+    VERIFICACION_CORREO = "verificacion-correo"
+
+
+@dataclass(frozen=True)
+class PlantillaCorreo:
+    """Plantilla tal cual la publica Productos y Configuración de Mercado (sin rellenar)."""
+
+    tipo: str
+    version: str
+    asunto: str
+    cuerpo_html: str
+    cuerpo_texto: str
+
+
+class NotificacionError(Exception):
+    """No se pudo preparar o publicar un correo. Nunca llega al cliente del registro."""
+
+
 class DomainError(Exception):
     """Base de los errores de negocio."""
 

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.semconv._incubating.attributes import code_attributes
 from opentelemetry.util._once import Once
 
@@ -54,6 +55,8 @@ def _contexto_otel_limpio():
         yield
     finally:
         otel_context.detach(token)
+        # HTTPXClientInstrumentor parcha httpx a nivel de proceso, no por app.
+        HTTPXClientInstrumentor().uninstrument()
 
 
 @pytest.fixture
