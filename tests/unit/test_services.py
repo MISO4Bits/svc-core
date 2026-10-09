@@ -213,6 +213,7 @@ async def test_obtener_consentimiento_inexistente(repos):
             primer_apellido="Consentimientos",
             fecha_nacimiento=date(1990, 1, 1),
             email="sin-consentimientos@example.com",
+            telefono="+573001234567",
         ),
         [],
     )
@@ -251,6 +252,7 @@ async def test_revocar_consentimiento_inexistente(repos):
             primer_apellido="Consentimientos",
             fecha_nacimiento=date(1990, 1, 1),
             email="sin-consentimientos-2@example.com",
+            telefono="+573001234567",
         ),
         [],
     )

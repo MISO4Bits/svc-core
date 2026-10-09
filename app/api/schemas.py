@@ -58,7 +58,7 @@ class ClienteOut(_Model):
     segundo_apellido: str | None = None
     fecha_nacimiento: date
     email: str
-    telefono: str | None = None
+    telefono: str
     estado: EstadoCliente
     correo_confirmado: bool
     confirmado_en: datetime | None = None

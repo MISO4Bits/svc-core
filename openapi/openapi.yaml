@@ -376,7 +376,7 @@ components:
     Cliente:
       type: object
       additionalProperties: false
-      required: [id, identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, estado, correoConfirmado, creadoEn]
+      required: [id, identityRef, tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, telefono, estado, correoConfirmado, creadoEn]
       properties:
         id: { type: string, format: uuid }
         identityRef: { type: string }
@@ -388,7 +388,7 @@ components:
         segundoApellido: { type: [string, 'null'] }
         fechaNacimiento: { type: string, format: date }
         email: { type: string, format: email }
-        telefono: { type: [string, 'null'] }
+        telefono: { type: string }
         estado: { $ref: '#/components/schemas/EstadoCliente' }
         correoConfirmado:
           type: boolean

@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS clientes (
     segundo_apellido TEXT,
     fecha_nacimiento TEXT NOT NULL,
     email TEXT NOT NULL,
-    telefono TEXT,
+    telefono TEXT NOT NULL,
     estado TEXT NOT NULL,
     correo_confirmado INTEGER NOT NULL DEFAULT 0,
     confirmado_en TEXT,

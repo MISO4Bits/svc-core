@@ -59,9 +59,9 @@ class Cliente:
     primer_apellido: str
     fecha_nacimiento: date
     email: str
+    telefono: str
     segundo_nombre: str | None = None
     segundo_apellido: str | None = None
-    telefono: str | None = None
     estado: EstadoCliente = EstadoCliente.ACTIVO
     correo_confirmado: bool = False
     confirmado_en: datetime | None = None

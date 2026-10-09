@@ -18,7 +18,7 @@ uvicorn app.main:app --reload --port 8080
 ```
 
 - Docs interactivas: <http://localhost:8080/docs> · contrato: <http://localhost:8080/openapi.yaml> · salud: <http://localhost:8080/health>
-- Crea un archivo `svc_core.db` (SQLite) en el directorio. Bórralo para empezar de cero.
+- Crea un archivo `svc_core.db` (SQLite) en el directorio. Bórralo para empezar de cero (obligatorio si es anterior a BITS-93: `telefono` ahora es `NOT NULL` y SQLite no lo migra).
 
 ### Variables de entorno (opcionales, prefijo `CORE_`)
 

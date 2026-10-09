@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+import aiosqlite
 import pytest
 
 from app.adapters.events import LoggingEventPublisher
@@ -40,6 +41,7 @@ def _cliente(**over) -> Cliente:
         primer_apellido="Ríos",
         fecha_nacimiento=date(1990, 1, 1),
         email="ana@example.com",
+        telefono="+573001234567",
     )
     base.update(over)
     return Cliente(**base)
@@ -134,6 +136,22 @@ async def test_sqlite_cliente_repository_conflicto(tmp_path):
     assert await repo.obtener_por_identity_ref("ausente") is None
     assert await repo.existe_por_correo("ana@example.com") is True
     assert await repo.existe_por_correo("otro@example.com") is False
+
+
+async def test_sqlite_exige_el_celular_a_nivel_de_base_de_datos(tmp_path):
+    db = SqliteDatabase(str(tmp_path / "c.db"))
+    await db.init()
+    async with db.connect() as conn:
+        with pytest.raises(aiosqlite.IntegrityError, match="telefono"):
+            await conn.execute(
+                """
+                INSERT INTO clientes (
+                    id, identity_ref, tipo_documento, numero_documento, primer_nombre,
+                    primer_apellido, fecha_nacimiento, email, telefono, estado, creado_en
+                ) VALUES ('1', 's', 'CC', '123456', 'Ana', 'Ríos', '1990-01-01',
+                          'ana@example.com', NULL, 'ACTIVO', '2026-01-01')
+                """
+            )
 
 
 async def test_sqlite_cliente_repository_confirmar_es_idempotente(tmp_path):
