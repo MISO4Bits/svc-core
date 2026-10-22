@@ -74,10 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_error_handlers(app)
     app.include_router(router, prefix="/v1")
-    app.include_router(evidencias_router, prefix="/v1")  # solo versionado, sin alias
-    # Alias temporal sin versión (BITS-275): permite desplegar svc-core antes de que
-    # bff-web y bff-mobile llamen a /v1. Se retira cuando ambos ya migraron.
-    app.include_router(router, include_in_schema=False)
+    app.include_router(evidencias_router, prefix="/v1")
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:

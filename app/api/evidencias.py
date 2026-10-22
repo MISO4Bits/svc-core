@@ -1,4 +1,4 @@
-"""Rutas de las evidencias de identidad. Se montan solo bajo ``/v1`` (sin el alias sin versión)."""
+"""Rutas de las evidencias de identidad. Se montan bajo ``/v1``."""
 
 from __future__ import annotations
 
