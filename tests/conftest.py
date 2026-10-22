@@ -39,6 +39,7 @@ def settings(tmp_path) -> Settings:
         repository_backend="sqlite",
         database_path=str(tmp_path / "test.db"),
         event_backend="memory",
+        almacen_backend="memory",
     )
 
 

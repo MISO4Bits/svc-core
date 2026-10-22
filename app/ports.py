@@ -9,8 +9,11 @@ from app.domain import (
     Consentimiento,
     ConsentimientoScope,
     DomainEvent,
+    Evidencia,
     PlantillaCorreo,
     TipoCorreo,
+    TipoEvidencia,
+    Veredicto,
 )
 
 
@@ -70,4 +73,50 @@ class IdentidadAdminPort(Protocol):
     async def generar_codigo_verificacion(self, email: str) -> str:
         """Pide a Identity Platform un código de un solo uso para verificar ese correo.
         Lanza ``NotificacionError`` si no lo obtiene."""
+        ...
+
+
+@runtime_checkable
+class EvidenciaRepository(Protocol):
+    async def vigente(self, cliente_id: str, tipo: TipoEvidencia) -> Evidencia | None:
+        """Última evidencia del tipo que no fue reemplazada ni consumida por una póliza."""
+        ...
+
+    async def guardar_reemplazando(self, evidencia: Evidencia) -> Evidencia:
+        """Guarda la evidencia y marca como reemplazada la vigente anterior del mismo tipo."""
+        ...
+
+    async def consumir(self, cliente_id: str, poliza_ref: str) -> int:
+        """Asocia las vigentes del cliente a la póliza (ya no cuentan como vigentes).
+        Devuelve cuántas consumió."""
+        ...
+
+    async def rechazos(self, cliente_id: str, tipo: TipoEvidencia) -> int:
+        """Rechazos acumulados del tipo desde la última evidencia guardada."""
+        ...
+
+    async def registrar_rechazo(self, cliente_id: str, tipo: TipoEvidencia) -> int:
+        """Suma un rechazo y devuelve el total."""
+        ...
+
+    async def reiniciar_rechazos(self, cliente_id: str, tipo: TipoEvidencia) -> None: ...
+
+
+@runtime_checkable
+class AlmacenEvidencias(Protocol):
+    async def guardar(self, clave: str, datos: bytes, content_type: str) -> str:
+        """Guarda la imagen y devuelve la referencia con la que se recupera."""
+        ...
+
+    async def obtener(self, referencia: str) -> bytes: ...
+
+
+@runtime_checkable
+class VerificadorDocumento(Protocol):
+    async def analizar(
+        self, imagen: bytes, tipo: TipoEvidencia, numero_esperado: str | None
+    ) -> Veredicto:
+        """Decide si la imagen sirve. Con ``numero_esperado`` y un reverso de cédula, la
+        acepta solo si el código del reverso contiene ese número; si no puede leerlo o no
+        coincide, devuelve ``REVISION_MANUAL``. El número leído no sale del verificador."""
         ...

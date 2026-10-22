@@ -232,3 +232,6 @@ sa-*.json
 gha-creds-*.json
 .env.*
 !.env.example
+
+# Fotos de identidad del almacén local de desarrollo (datos personales)
+/evidencias/

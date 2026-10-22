@@ -21,7 +21,7 @@ from app.ports import IdempotencyStore
 from app.services import IdentityService
 
 logger = logging.getLogger("svc_core.api")
-router = APIRouter()
+router = APIRouter()  # create_app lo monta bajo /v1
 
 
 def get_service(request: Request) -> IdentityService:
@@ -51,12 +51,12 @@ async def registrar_cliente(
     response: Response,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> ClienteOut:
-    logger.info("POST /clientes: solicitud recibida")
+    logger.info("POST /v1/clientes: solicitud recibida")
     if idempotency_key:
         cached = await idempotency.get(idempotency_key)
         if cached is not None:
             response.status_code = cached["status"]
-            response.headers["Location"] = f"/clientes/{cached['body']['id']}"
+            response.headers["Location"] = f"/v1/clientes/{cached['body']['id']}"
             return ClienteOut.model_validate(cached["body"])
 
     cliente = await service.registrar_cliente(
@@ -77,7 +77,7 @@ async def registrar_cliente(
         politica_version_datos_financieros=payload.politica_version_datos_financieros,
     )
     out = ClienteOut.model_validate(cliente)
-    response.headers["Location"] = f"/clientes/{cliente.id}"
+    response.headers["Location"] = f"/v1/clientes/{cliente.id}"
 
     # Bienvenida y verificación salen después de responder y sin afectar el alta;
     # conservan el trace_id de esta petición.
@@ -106,7 +106,9 @@ async def buscar_cliente_por_identidad(
     service: ServiceDep,
     identity_ref: Annotated[str, Query(alias="identityRef", max_length=128)],
 ) -> ClienteOut:
-    logger.info("GET /clientes: solicitud recibida identity_ref=%s", sanear_para_log(identity_ref))
+    logger.info(
+        "GET /v1/clientes: solicitud recibida identity_ref=%s", sanear_para_log(identity_ref)
+    )
     cliente = await service.buscar_por_identity_ref(identity_ref)
     return ClienteOut.model_validate(cliente)
 
@@ -120,7 +122,7 @@ async def consultar_disponibilidad(
         str | None, Query(alias="numeroDocumento", min_length=4, max_length=20)
     ] = None,
 ) -> DisponibilidadOut:
-    logger.info("GET /clientes/disponibilidad: solicitud recibida")
+    logger.info("GET /v1/clientes/disponibilidad: solicitud recibida")
     resultado = await service.existe_cliente(
         email=correo, tipo_documento=tipo_documento, numero_documento=numero_documento
     )
@@ -129,14 +131,16 @@ async def consultar_disponibilidad(
 
 @router.get("/clientes/{cliente_id}", response_model=ClienteOut, tags=["Clientes"])
 async def obtener_cliente(cliente_id: str, service: ServiceDep) -> ClienteOut:
-    logger.info("GET /clientes/%s: solicitud recibida", sanear_para_log(cliente_id))
+    logger.info("GET /v1/clientes/%s: solicitud recibida", sanear_para_log(cliente_id))
     cliente = await service.obtener_cliente(cliente_id)
     return ClienteOut.model_validate(cliente)
 
 
 @router.post("/clientes/{cliente_id}/confirmacion", response_model=ClienteOut, tags=["Clientes"])
 async def confirmar_cliente(cliente_id: str, service: ServiceDep) -> ClienteOut:
-    logger.info("POST /clientes/%s/confirmacion: solicitud recibida", sanear_para_log(cliente_id))
+    logger.info(
+        "POST /v1/clientes/%s/confirmacion: solicitud recibida", sanear_para_log(cliente_id)
+    )
     cliente = await service.confirmar_cliente(cliente_id)
     return ClienteOut.model_validate(cliente)
 
@@ -147,7 +151,9 @@ async def confirmar_cliente(cliente_id: str, service: ServiceDep) -> ClienteOut:
     tags=["Consentimientos"],
 )
 async def listar_consentimientos(cliente_id: str, service: ServiceDep) -> list[ConsentimientoOut]:
-    logger.info("GET /clientes/%s/consentimientos: solicitud recibida", sanear_para_log(cliente_id))
+    logger.info(
+        "GET /v1/clientes/%s/consentimientos: solicitud recibida", sanear_para_log(cliente_id)
+    )
     items = await service.listar_consentimientos(cliente_id)
     return [ConsentimientoOut.model_validate(c) for c in items]
 
@@ -164,7 +170,7 @@ async def otorgar_consentimiento(
     service: ServiceDep,
 ) -> ConsentimientoOut:
     logger.info(
-        "POST /clientes/%s/consentimientos: solicitud recibida scope=%s",
+        "POST /v1/clientes/%s/consentimientos: solicitud recibida scope=%s",
         sanear_para_log(cliente_id),
         payload.scope,
     )
@@ -186,7 +192,7 @@ async def obtener_consentimiento(
     cliente_id: str, scope: ConsentimientoScope, service: ServiceDep
 ) -> ConsentimientoOut:
     logger.info(
-        "GET /clientes/%s/consentimientos/%s: solicitud recibida",
+        "GET /v1/clientes/%s/consentimientos/%s: solicitud recibida",
         sanear_para_log(cliente_id),
         scope,
     )
@@ -203,7 +209,7 @@ async def revocar_consentimiento(
     cliente_id: str, scope: ConsentimientoScope, service: ServiceDep
 ) -> Response:
     logger.info(
-        "DELETE /clientes/%s/consentimientos/%s: solicitud recibida",
+        "DELETE /v1/clientes/%s/consentimientos/%s: solicitud recibida",
         sanear_para_log(cliente_id),
         scope,
     )
@@ -220,7 +226,7 @@ async def estado_consentimiento(
     cliente_id: str, scope: ConsentimientoScope, service: ServiceDep
 ) -> EstadoConsentimientoOut:
     logger.info(
-        "GET /clientes/%s/consentimientos/%s/estado: solicitud recibida",
+        "GET /v1/clientes/%s/consentimientos/%s/estado: solicitud recibida",
         sanear_para_log(cliente_id),
         scope,
     )

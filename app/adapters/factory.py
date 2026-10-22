@@ -2,26 +2,34 @@
 
 from __future__ import annotations
 
+from app.adapters.almacen import FilesystemAlmacenEvidencias, InMemoryAlmacenEvidencias
 from app.adapters.events import LoggingEventPublisher
 from app.adapters.memory import (
     InMemoryClienteRepository,
     InMemoryConsentimientoRepository,
     InMemoryEventPublisher,
+    InMemoryEvidenciaRepository,
     InMemoryIdempotencyStore,
 )
 from app.adapters.sqlite import (
     SqliteClienteRepository,
     SqliteConsentimientoRepository,
     SqliteDatabase,
+    SqliteEvidenciaRepository,
     SqliteIdempotencyStore,
 )
+from app.adapters.verificador_mock import VerificadorMock
+from app.calidad_imagen import UmbralesCalidad
 from app.config import Settings
 from app.notificaciones import NotificacionService
 from app.ports import (
+    AlmacenEvidencias,
     ClienteRepository,
     ConsentimientoRepository,
     EventPublisher,
+    EvidenciaRepository,
     IdempotencyStore,
+    VerificadorDocumento,
 )
 
 
@@ -43,6 +51,45 @@ def build_repositories(
             SqliteIdempotencyStore(db),
         )
     raise ValueError(f"repository_backend no soportado: {settings.repository_backend}")
+
+
+def build_evidencias(
+    settings: Settings,
+) -> tuple[EvidenciaRepository, AlmacenEvidencias, VerificadorDocumento]:
+    """Repositorio, almacén de imágenes y verificador de las evidencias de identidad."""
+    if settings.repository_backend == "memory":
+        repositorio: EvidenciaRepository = InMemoryEvidenciaRepository()
+    elif settings.repository_backend == "sqlite":
+        repositorio = SqliteEvidenciaRepository(SqliteDatabase(settings.database_path))
+    else:
+        raise ValueError(f"repository_backend no soportado: {settings.repository_backend}")
+
+    if settings.almacen_backend == "memory":
+        almacen: AlmacenEvidencias = InMemoryAlmacenEvidencias()
+    elif settings.almacen_backend == "filesystem":
+        almacen = FilesystemAlmacenEvidencias(settings.almacen_ruta)
+    elif settings.almacen_backend == "gcs":
+        from app.adapters.gcs import GcsAlmacenEvidencias
+
+        if not settings.almacen_bucket:
+            raise ValueError("CORE_ALMACEN_BUCKET es obligatorio con almacen_backend=gcs")
+        almacen = GcsAlmacenEvidencias(settings.almacen_bucket)
+    else:
+        raise ValueError(f"almacen_backend no soportado: {settings.almacen_backend}")
+
+    if settings.verificador_backend == "mock":
+        verificador: VerificadorDocumento = VerificadorMock(settings.verificador_mock_secuencia)
+    elif settings.verificador_backend == "local":
+        # Import diferido: cargar OpenCV y zxing solo cuando se usa el verificador real.
+        from app.adapters.verificador_local import VerificadorLocal
+
+        verificador = VerificadorLocal(
+            UmbralesCalidad.desde(settings),
+            max_concurrentes=settings.verificador_max_concurrentes,
+        )
+    else:
+        raise ValueError(f"verificador_backend no soportado: {settings.verificador_backend}")
+    return repositorio, almacen, verificador
 
 
 def build_event_publisher(settings: Settings) -> EventPublisher:

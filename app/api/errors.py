@@ -13,6 +13,8 @@ from app.domain import (
     ClienteYaExiste,
     ConsentimientoNoEncontrado,
     DomainError,
+    ImagenInvalida,
+    ImagenMuyGrande,
 )
 from app.logging_utils import sanear_para_log
 
@@ -68,6 +70,14 @@ def install_error_handlers(app: FastAPI) -> None:
             detail=str(exc),
             instance=str(request.url),
         )
+
+    @app.exception_handler(ImagenInvalida)
+    async def _imagen_invalida(request: Request, exc: ImagenInvalida) -> JSONResponse:
+        return problema(400, "Imagen inválida", detail=str(exc), instance=str(request.url))
+
+    @app.exception_handler(ImagenMuyGrande)
+    async def _imagen_muy_grande(request: Request, exc: ImagenMuyGrande) -> JSONResponse:
+        return problema(413, "Imagen demasiado grande", detail=str(exc), instance=str(request.url))
 
     @app.exception_handler(DomainError)
     async def _regla_negocio(request: Request, exc: DomainError) -> JSONResponse:

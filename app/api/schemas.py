@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -12,7 +13,10 @@ from app.domain import (
     ConsentimientoScope,
     EstadoCliente,
     EstadoConsentimiento,
+    EstadoEvidencia,
+    MotivoRechazo,
     TipoDocumento,
+    TipoEvidencia,
 )
 
 _EMAIL = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
@@ -93,3 +97,19 @@ class EstadoConsentimientoOut(_Model):
     estado: EstadoConsentimiento
     version: int
     vigente: bool
+
+
+class EvidenciaSubidaOut(_Model):
+    evidencia_id: str | None = None
+    tipo: TipoEvidencia
+    estado: EstadoEvidencia
+    motivo: MotivoRechazo | None = None
+    intentos_restantes: int
+
+
+class EstadoTipoEvidenciaOut(_Model):
+    tipo: TipoEvidencia
+    estado: Literal["ACEPTADA", "REVISION_MANUAL", "PENDIENTE"]
+    evidencia_id: str | None = None
+    creada_en: datetime | None = None
+    intentos_restantes: int

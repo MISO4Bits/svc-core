@@ -11,6 +11,7 @@ import re
 import pytest
 from jsonschema import Draft202012Validator
 
+from tests import imagenes
 from tests.conftest import CLIENTE_VALIDO
 
 _PATH_PARAM = re.compile(r"\{[^}]+\}")
@@ -29,7 +30,7 @@ def _app_operations(app) -> set[tuple[str, str]]:
     """Operaciones que FastAPI genera desde el código (su propio OpenAPI)."""
     ops: set[tuple[str, str]] = set()
     for path, item in app.openapi()["paths"].items():
-        if not path.startswith("/clientes"):
+        if not path.startswith("/v1/clientes"):
             continue
         for method in item:
             if method.lower() in {"get", "post", "put", "patch", "delete"}:
@@ -67,49 +68,89 @@ def _assert_valid(spec: dict, ref: str, instance) -> None:
 
 
 async def test_respuestas_cumplen_el_esquema(client, openapi_spec):
-    creado = await client.post("/clientes", json=CLIENTE_VALIDO)
+    creado = await client.post("/v1/clientes", json=CLIENTE_VALIDO)
     assert creado.status_code == 201
     _assert_valid(openapi_spec, "Cliente", creado.json())
     cliente_id = creado.json()["id"]
 
-    obtenido = await client.get(f"/clientes/{cliente_id}")
+    obtenido = await client.get(f"/v1/clientes/{cliente_id}")
     assert obtenido.status_code == 200
     _assert_valid(openapi_spec, "Cliente", obtenido.json())
 
     otorgado = await client.post(
-        f"/clientes/{cliente_id}/consentimientos",
+        f"/v1/clientes/{cliente_id}/consentimientos",
         json={"scope": "OPEN_FINANCE", "politicaVersion": "v1", "canal": "WEB"},
     )
     assert otorgado.status_code == 201
     _assert_valid(openapi_spec, "Consentimiento", otorgado.json())
 
-    estado = await client.get(f"/clientes/{cliente_id}/consentimientos/OPEN_FINANCE/estado")
+    estado = await client.get(f"/v1/clientes/{cliente_id}/consentimientos/OPEN_FINANCE/estado")
     assert estado.status_code == 200
     _assert_valid(openapi_spec, "EstadoConsentimiento", estado.json())
 
-    lista = await client.get(f"/clientes/{cliente_id}/consentimientos")
+    lista = await client.get(f"/v1/clientes/{cliente_id}/consentimientos")
     assert lista.status_code == 200
     for item in lista.json():
         _assert_valid(openapi_spec, "Consentimiento", item)
 
     disponibilidad = await client.get(
-        "/clientes/disponibilidad", params={"correo": "otro@example.com"}
+        "/v1/clientes/disponibilidad", params={"correo": "otro@example.com"}
     )
     assert disponibilidad.status_code == 200
     _assert_valid(openapi_spec, "Disponibilidad", disponibilidad.json())
 
-    confirmado = await client.post(f"/clientes/{cliente_id}/confirmacion")
+    confirmado = await client.post(f"/v1/clientes/{cliente_id}/confirmacion")
     assert confirmado.status_code == 200
     _assert_valid(openapi_spec, "Cliente", confirmado.json())
 
 
+async def test_evidencias_cumplen_el_esquema(client, openapi_spec):
+    cliente_id = (await client.post("/v1/clientes", json=CLIENTE_VALIDO)).json()["id"]
+    ruta = f"/v1/clientes/{cliente_id}/evidencias-identidad"
+    foto = ("foto.jpg", imagenes.a_bytes(imagenes.sin_tarjeta()), "image/jpeg")
+
+    subida = await client.post(ruta, data={"tipo": "cedula_frente"}, files={"imagen": foto})
+    assert subida.status_code == 201
+    _assert_valid(openapi_spec, "EvidenciaSubida", subida.json())
+
+    estado = await client.get(ruta)
+    assert estado.status_code == 200
+    assert len(estado.json()) == 3
+    for item in estado.json():
+        _assert_valid(openapi_spec, "EstadoTipoEvidencia", item)
+
+
+async def test_evidencia_a_reintentar_cumple_el_esquema(openapi_spec, settings):
+    from httpx import ASGITransport, AsyncClient
+
+    from app.adapters.factory import maybe_init
+    from app.api.app import create_app
+
+    aplicacion = create_app(settings.model_copy(update={"verificador_mock_secuencia": "OSCURA"}))
+    await maybe_init(aplicacion.state.clientes)
+    async with AsyncClient(transport=ASGITransport(app=aplicacion), base_url="http://t") as http:
+        cliente_id = (await http.post("/v1/clientes", json=CLIENTE_VALIDO)).json()["id"]
+        foto = ("foto.jpg", imagenes.a_bytes(imagenes.sin_tarjeta()), "image/jpeg")
+
+        rechazo = await http.post(
+            f"/v1/clientes/{cliente_id}/evidencias-identidad",
+            data={"tipo": "cedula_frente"},
+            files={"imagen": foto},
+        )
+
+    assert rechazo.status_code == 200
+    _assert_valid(openapi_spec, "EvidenciaSubida", rechazo.json())
+    assert rechazo.json()["evidenciaId"] is None
+    assert rechazo.json()["motivo"] == "OSCURA"
+
+
 async def test_errores_cumplen_problem_details(client, openapi_spec):
-    no_existe = await client.get("/clientes/desconocido")
+    no_existe = await client.get("/v1/clientes/desconocido")
     assert no_existe.status_code == 404
     assert no_existe.headers["content-type"].startswith("application/problem+json")
     _assert_valid(openapi_spec, "Problema", no_existe.json())
 
-    malo = await client.post("/clientes", json={"email": "x"})
+    malo = await client.post("/v1/clientes", json={"email": "x"})
     assert malo.status_code == 400
     _assert_valid(openapi_spec, "Problema", malo.json())
 

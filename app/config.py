@@ -37,6 +37,37 @@ class Settings(BaseSettings):
     correo_mercado: str = "CO"
     correo_idioma: str = "es-CO"
 
+    # Evidencias de identidad (BITS-275): cédula por ambas caras y selfie.
+    # Verificador: "mock" (veredictos configurables) | "local" (análisis de imagen en proceso).
+    verificador_backend: str = "mock"
+    # Veredictos del mock, en rotación: "ACEPTADA", "REVISION_MANUAL" o un motivo de rechazo
+    # (BORROSA, OSCURA, REFLEJO, RECORTADA, NO_ES_CEDULA). P. ej. "BORROSA,ACEPTADA".
+    verificador_mock_secuencia: str = "ACEPTADA"
+    # Si el verificador tarda más, la evidencia pasa a revisión manual (no se bloquea al usuario).
+    verificador_timeout_s: float = 2.5
+    # Análisis simultáneos por pod: usan procesador y comparten pod con las transacciones.
+    verificador_max_concurrentes: int = 2
+    # Almacén de imágenes: "memory" | "filesystem" | "gcs"
+    almacen_backend: str = "filesystem"
+    almacen_ruta: str = "./evidencias"
+    almacen_bucket: str | None = None
+    evidencia_max_bytes: int = 3 * 1024 * 1024
+    evidencia_max_pixeles: int = 40_000_000
+    evidencia_intentos_max: int = 3
+    # Umbrales de calidad. Provisionales hasta calibrarlos con fotos reales
+    # (tools/calibrar_calidad.py); se ajustan por entorno sin tocar el algoritmo.
+    calidad_lado_min_px: int = 600
+    calidad_nitidez_min: float = 40.0
+    calidad_luz_media_min: float = 55.0
+    calidad_luz_media_max: float = 225.0
+    calidad_oscuros_max: float = 0.60
+    calidad_quemados_max: float = 0.45
+    calidad_reflejo_max: float = 0.04
+    calidad_proporcion_tarjeta: float = 1.586
+    calidad_proporcion_tolerancia: float = 0.25
+    calidad_tarjeta_area_min: float = 0.25
+    calidad_margen_borde: float = 0.01
+
     # Observabilidad (DI-008): OTLP/gRPC hacia Grafana Alloy dentro del
     # cluster. Deshabilitado por defecto — en local/tests no hay receptor
     # escuchando; se habilita vía CORE_OTEL_ENABLED=true en el manifiesto de
