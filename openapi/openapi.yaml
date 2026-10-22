@@ -35,12 +35,14 @@ tags:
     description: Alta y consulta de clientes.
   - name: Consentimientos
     description: Otorgamiento, consulta y revocación de consentimientos por scope.
+  - name: Evidencias de identidad
+    description: Cédula por ambas caras y selfie previas a la firma (BITS-275).
 
 security:
   - serviceAuth: []
 
 paths:
-  /clientes:
+  /v1/clientes:
     get:
       operationId: buscarClientePorIdentidad
       tags: [Clientes]
@@ -112,7 +114,7 @@ paths:
         '409': { $ref: '#/components/responses/Conflicto' }
         '422': { $ref: '#/components/responses/EntidadNoProcesable' }
 
-  /clientes/disponibilidad:
+  /v1/clientes/disponibilidad:
     get:
       operationId: consultarDisponibilidad
       tags: [Clientes]
@@ -120,7 +122,7 @@ paths:
       description: |
         Chequeo de solo lectura para validación en vivo del formulario de registro
         (BITS-93). No reemplaza la validación atómica de unicidad que hace
-        `POST /clientes` en el momento de crear — esta consulta es una ayuda de UX,
+        `POST /v1/clientes` en el momento de crear — esta consulta es una ayuda de UX,
         sujeta a condiciones de carrera.
       parameters:
         - name: correo
@@ -143,7 +145,7 @@ paths:
               schema: { $ref: '#/components/schemas/Disponibilidad' }
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
 
-  /clientes/{clienteId}/confirmacion:
+  /v1/clientes/{clienteId}/confirmacion:
     parameters:
       - $ref: '#/components/parameters/ClienteId'
     post:
@@ -166,7 +168,7 @@ paths:
               schema: { $ref: '#/components/schemas/Cliente' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /clientes/{clienteId}:
+  /v1/clientes/{clienteId}:
     parameters:
       - $ref: '#/components/parameters/ClienteId'
     get:
@@ -181,7 +183,7 @@ paths:
               schema: { $ref: '#/components/schemas/Cliente' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /clientes/{clienteId}/consentimientos:
+  /v1/clientes/{clienteId}/consentimientos:
     parameters:
       - $ref: '#/components/parameters/ClienteId'
     get:
@@ -220,7 +222,7 @@ paths:
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /clientes/{clienteId}/consentimientos/{scope}:
+  /v1/clientes/{clienteId}/consentimientos/{scope}:
     parameters:
       - $ref: '#/components/parameters/ClienteId'
       - $ref: '#/components/parameters/Scope'
@@ -249,7 +251,7 @@ paths:
           description: Consentimiento revocado.
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /clientes/{clienteId}/consentimientos/{scope}/estado:
+  /v1/clientes/{clienteId}/consentimientos/{scope}/estado:
     parameters:
       - $ref: '#/components/parameters/ClienteId'
       - $ref: '#/components/parameters/Scope'
@@ -266,6 +268,74 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoConsentimiento' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /v1/clientes/{clienteId}/evidencias-identidad:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+    post:
+      operationId: subirEvidenciaIdentidad
+      tags: [Evidencias de identidad]
+      summary: Sube una foto de identidad y devuelve el veredicto
+      description: |
+        Una imagen por request: `tipo` dice qué se sube y `imagen` es el archivo, ya
+        comprimido por el cliente (JPEG o PNG, máximo 3 MB).
+
+        El servidor decide si la foto sirve:
+
+        - **`ACEPTADA`** (201): se guarda como evidencia vigente del tipo y reemplaza la
+          anterior no consumida. En el reverso de la cédula de ciudadanía (`CC`), solo se
+          acepta si el código del reverso contiene el número con el que el cliente se registró.
+        - **`REINTENTAR`** (200): no se guarda nada. `motivo` dice qué corregir.
+        - **`REVISION_MANUAL`** (201): se guarda y una persona la revisa. Ocurre si no se pudo
+          leer el código del reverso o su número no coincide, si el documento no es `CC`, si el
+          verificador tardó demasiado o falló, y al **tercer** rechazo de un mismo tipo
+          (la foto de ese tercer intento sí se guarda).
+
+        El número leído de la imagen no sale de este servicio. `intentosRestantes` cuenta los
+        rechazos que quedan antes de pasar a revisión manual; se reinicia al guardar una evidencia.
+
+        Las fotos rechazadas no se guardan. Las aceptadas se conservan mientras viva la póliza
+        que las referencie; una evidencia consumida por una póliza no se reutiliza en otra.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/SubirEvidenciaRequest' }
+      responses:
+        '200':
+          description: La foto no sirve (`estado = REINTENTAR`). No se creó ninguna evidencia.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenciaSubida' }
+        '201':
+          description: Evidencia guardada (`ACEPTADA` o `REVISION_MANUAL`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenciaSubida' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '413':
+          description: La imagen supera el máximo permitido.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+    get:
+      operationId: obtenerEstadoEvidenciasIdentidad
+      tags: [Evidencias de identidad]
+      summary: Estado vigente de cada tipo de evidencia
+      description: |
+        Siempre devuelve los tres tipos. `PENDIENTE` significa que no hay evidencia vigente
+        (nunca se subió, o la consumió una póliza). Sirve para retomar el flujo y para habilitar
+        el paso a la firma: ambas caras de la cédula en `ACEPTADA` o `REVISION_MANUAL`.
+      responses:
+        '200':
+          description: Estado por tipo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EstadoTipoEvidencia' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
 components:
@@ -457,6 +527,55 @@ components:
     Canal:
       type: string
       enum: [WEB, MOVIL, BACKOFFICE]
+
+    TipoEvidencia:
+      type: string
+      enum: [cedula_frente, cedula_reverso, selfie]
+    EstadoEvidencia:
+      type: string
+      enum: [ACEPTADA, REINTENTAR, REVISION_MANUAL]
+    MotivoRechazo:
+      type: string
+      enum: [BORROSA, OSCURA, REFLEJO, RECORTADA, NO_ES_CEDULA]
+      description: |
+        `REFLEJO` incluye la sobreexposición global. `BORROSA` incluye la foto con muy pocos
+        píxeles. `NO_ES_CEDULA` es que no se halló un rectángulo con la proporción de una tarjeta.
+
+    SubirEvidenciaRequest:
+      type: object
+      required: [tipo, imagen]
+      properties:
+        tipo: { $ref: '#/components/schemas/TipoEvidencia' }
+        imagen: { type: string, format: binary, description: Foto en JPEG o PNG, máximo 3 MB. }
+
+    EvidenciaSubida:
+      type: object
+      additionalProperties: false
+      required: [tipo, estado, intentosRestantes]
+      properties:
+        evidenciaId:
+          type: [string, 'null']
+          format: uuid
+          description: "`null` con `REINTENTAR`: no se guardó nada."
+        tipo: { $ref: '#/components/schemas/TipoEvidencia' }
+        estado: { $ref: '#/components/schemas/EstadoEvidencia' }
+        motivo:
+          oneOf:
+            - { $ref: '#/components/schemas/MotivoRechazo' }
+            - { type: 'null' }
+          description: Solo con `REINTENTAR`.
+        intentosRestantes: { type: integer, minimum: 0 }
+
+    EstadoTipoEvidencia:
+      type: object
+      additionalProperties: false
+      required: [tipo, estado, intentosRestantes]
+      properties:
+        tipo: { $ref: '#/components/schemas/TipoEvidencia' }
+        estado: { type: string, enum: [ACEPTADA, REVISION_MANUAL, PENDIENTE] }
+        evidenciaId: { type: [string, 'null'], format: uuid }
+        creadaEn: { type: [string, 'null'], format: date-time }
+        intentosRestantes: { type: integer, minimum: 0 }
 
     Problema:
       description: Error en formato RFC 9457 (Problem Details for HTTP APIs).

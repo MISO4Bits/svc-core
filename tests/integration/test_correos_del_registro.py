@@ -41,7 +41,7 @@ async def con_correos(tmp_path):
 async def test_registrar_publica_los_dos_correos_con_el_enlace_a_la_web(con_correos):
     app, http = con_correos
 
-    resp = await http.post("/clientes", json=CLIENTE_VALIDO)
+    resp = await http.post("/v1/clientes", json=CLIENTE_VALIDO)
 
     assert resp.status_code == 201
     assert _tipos(app).count("EnviarCorreo") == 2
@@ -60,8 +60,8 @@ async def test_el_reintento_idempotente_no_vuelve_a_enviar_correos(con_correos):
     app, http = con_correos
     cabeceras = {"Idempotency-Key": "reintento-1"}
 
-    await http.post("/clientes", json=CLIENTE_VALIDO, headers=cabeceras)
-    repetido = await http.post("/clientes", json=CLIENTE_VALIDO, headers=cabeceras)
+    await http.post("/v1/clientes", json=CLIENTE_VALIDO, headers=cabeceras)
+    repetido = await http.post("/v1/clientes", json=CLIENTE_VALIDO, headers=cabeceras)
 
     assert repetido.status_code == 201
     assert _tipos(app).count("EnviarCorreo") == 2
@@ -69,9 +69,9 @@ async def test_el_reintento_idempotente_no_vuelve_a_enviar_correos(con_correos):
 
 async def test_un_registro_rechazado_no_envia_correos(con_correos):
     app, http = con_correos
-    await http.post("/clientes", json=CLIENTE_VALIDO)
+    await http.post("/v1/clientes", json=CLIENTE_VALIDO)
 
-    repetido = await http.post("/clientes", json=CLIENTE_VALIDO)
+    repetido = await http.post("/v1/clientes", json=CLIENTE_VALIDO)
 
     assert repetido.status_code == 409
     assert _tipos(app).count("EnviarCorreo") == 2
@@ -80,7 +80,7 @@ async def test_un_registro_rechazado_no_envia_correos(con_correos):
 async def test_con_las_notificaciones_apagadas_solo_se_publica_el_registro(tmp_path):
     app, http = await _cliente(_settings(tmp_path, notificaciones_backend="off"))
     async with http:
-        resp = await http.post("/clientes", json=CLIENTE_VALIDO)
+        resp = await http.post("/v1/clientes", json=CLIENTE_VALIDO)
 
     assert resp.status_code == 201
     assert _tipos(app) == ["ClienteRegistrado"]
@@ -94,7 +94,7 @@ async def test_un_fallo_de_los_correos_no_cambia_la_respuesta_del_registro(tmp_p
 
     app.state.notificaciones._plantillas.obtener_vigente = _roto
     async with http:
-        resp = await http.post("/clientes", json=CLIENTE_VALIDO)
+        resp = await http.post("/v1/clientes", json=CLIENTE_VALIDO)
 
     assert resp.status_code == 201
     assert _tipos(app) == ["ClienteRegistrado"]

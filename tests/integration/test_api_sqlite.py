@@ -7,109 +7,109 @@ from tests.conftest import CLIENTE_VALIDO
 
 async def test_registro_sin_telefono_devuelve_400(client):
     sin_telefono = {k: v for k, v in CLIENTE_VALIDO.items() if k != "telefono"}
-    respuesta = await client.post("/clientes", json=sin_telefono)
+    respuesta = await client.post("/v1/clientes", json=sin_telefono)
     assert respuesta.status_code == 400
     assert any(e["campo"].endswith("telefono") for e in respuesta.json()["errores"])
 
 
 async def test_registro_y_consulta(client, app):
-    creado = await client.post("/clientes", json=CLIENTE_VALIDO)
+    creado = await client.post("/v1/clientes", json=CLIENTE_VALIDO)
     assert creado.status_code == 201
     body = creado.json()
     assert body["estado"] == "ACTIVO"
-    assert creado.headers["location"] == f"/clientes/{body['id']}"
+    assert creado.headers["location"] == f"/v1/clientes/{body['id']}"
 
-    obtenido = await client.get(f"/clientes/{body['id']}")
+    obtenido = await client.get(f"/v1/clientes/{body['id']}")
     assert obtenido.status_code == 200
     assert obtenido.json()["email"] == CLIENTE_VALIDO["email"]
 
     por_identidad = await client.get(
-        "/clientes", params={"identityRef": CLIENTE_VALIDO["identityRef"]}
+        "/v1/clientes", params={"identityRef": CLIENTE_VALIDO["identityRef"]}
     )
     assert por_identidad.status_code == 200
     assert por_identidad.json()["id"] == body["id"]
-    assert (await client.get("/clientes", params={"identityRef": "nope"})).status_code == 404
+    assert (await client.get("/v1/clientes", params={"identityRef": "nope"})).status_code == 404
 
     eventos = [e.tipo for e in app.state.events.events]
     assert eventos == ["ClienteRegistrado"]
 
 
 async def test_registro_duplicado_devuelve_409(client):
-    await client.post("/clientes", json=CLIENTE_VALIDO)
-    repetido = await client.post("/clientes", json=CLIENTE_VALIDO)
+    await client.post("/v1/clientes", json=CLIENTE_VALIDO)
+    repetido = await client.post("/v1/clientes", json=CLIENTE_VALIDO)
     assert repetido.status_code == 409
     assert repetido.json()["status"] == 409
     assert repetido.json()["errores"][0]["campo"] == "correo"
 
 
 async def test_registro_documento_duplicado_indica_campo_documento(client):
-    await client.post("/clientes", json=CLIENTE_VALIDO)
+    await client.post("/v1/clientes", json=CLIENTE_VALIDO)
     otro_correo = {**CLIENTE_VALIDO, "email": "otra.persona@example.com"}
-    repetido = await client.post("/clientes", json=otro_correo)
+    repetido = await client.post("/v1/clientes", json=otro_correo)
     assert repetido.status_code == 409
     assert repetido.json()["errores"][0]["campo"] == "documento"
 
 
 async def test_registro_correo_desechable_devuelve_422(client):
     payload = {**CLIENTE_VALIDO, "email": "ana@mailinator.com"}
-    resp = await client.post("/clientes", json=payload)
+    resp = await client.post("/v1/clientes", json=payload)
     assert resp.status_code == 422
 
 
 async def test_registro_declina_financiero_no_bloquea(client):
     payload = {**CLIENTE_VALIDO, "autorizaDatosFinancieros": False}
-    resp = await client.post("/clientes", json=payload)
+    resp = await client.post("/v1/clientes", json=payload)
     assert resp.status_code == 201
     assert resp.json()["estado"] == "ACTIVO"
 
 
 async def test_disponibilidad(client):
-    await client.post("/clientes", json=CLIENTE_VALIDO)
+    await client.post("/v1/clientes", json=CLIENTE_VALIDO)
 
     ocupado = await client.get(
-        "/clientes/disponibilidad", params={"correo": CLIENTE_VALIDO["email"]}
+        "/v1/clientes/disponibilidad", params={"correo": CLIENTE_VALIDO["email"]}
     )
     assert ocupado.status_code == 200
     assert ocupado.json()["correoDisponible"] is False
 
-    libre = await client.get("/clientes/disponibilidad", params={"correo": "libre@example.com"})
+    libre = await client.get("/v1/clientes/disponibilidad", params={"correo": "libre@example.com"})
     assert libre.json()["correoDisponible"] is True
     assert libre.json()["documentoDisponible"] is None
 
 
 async def test_confirmacion_es_idempotente(client):
-    creado = (await client.post("/clientes", json=CLIENTE_VALIDO)).json()
+    creado = (await client.post("/v1/clientes", json=CLIENTE_VALIDO)).json()
     assert creado["correoConfirmado"] is False
 
-    confirmado = await client.post(f"/clientes/{creado['id']}/confirmacion")
+    confirmado = await client.post(f"/v1/clientes/{creado['id']}/confirmacion")
     assert confirmado.status_code == 200
     assert confirmado.json()["correoConfirmado"] is True
     primera_vez = confirmado.json()["confirmadoEn"]
 
-    otra_vez = await client.post(f"/clientes/{creado['id']}/confirmacion")
+    otra_vez = await client.post(f"/v1/clientes/{creado['id']}/confirmacion")
     assert otra_vez.json()["confirmadoEn"] == primera_vez
 
 
 async def test_confirmacion_cliente_inexistente_devuelve_404(client):
-    resp = await client.post("/clientes/00000000-0000-0000-0000-000000000000/confirmacion")
+    resp = await client.post("/v1/clientes/00000000-0000-0000-0000-000000000000/confirmacion")
     assert resp.status_code == 404
 
 
 async def test_cliente_inexistente_devuelve_404(client):
-    resp = await client.get("/clientes/00000000-0000-0000-0000-000000000000")
+    resp = await client.get("/v1/clientes/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
 
 
 async def test_body_invalido_devuelve_400(client):
-    resp = await client.post("/clientes", json={"email": "malo"})
+    resp = await client.post("/v1/clientes", json={"email": "malo"})
     assert resp.status_code == 400
     assert resp.json()["errores"]
 
 
 async def test_idempotencia_no_duplica(client, app):
     headers = {"Idempotency-Key": "clave-abc"}
-    primero = await client.post("/clientes", json=CLIENTE_VALIDO, headers=headers)
-    segundo = await client.post("/clientes", json=CLIENTE_VALIDO, headers=headers)
+    primero = await client.post("/v1/clientes", json=CLIENTE_VALIDO, headers=headers)
+    segundo = await client.post("/v1/clientes", json=CLIENTE_VALIDO, headers=headers)
 
     assert primero.status_code == segundo.status_code == 201
     assert primero.json()["id"] == segundo.json()["id"]
@@ -120,8 +120,8 @@ async def test_ciclo_de_consentimiento(client):
     # El registro unificado (BITS-93) ya crea OPEN_DATA y OPEN_FINANCE en
     # version 1 (CLIENTE_VALIDO autoriza ambos), así que otorgar de nuevo
     # parte de ahí, no de version 1.
-    cliente_id = (await client.post("/clientes", json=CLIENTE_VALIDO)).json()["id"]
-    ruta = f"/clientes/{cliente_id}/consentimientos"
+    cliente_id = (await client.post("/v1/clientes", json=CLIENTE_VALIDO)).json()["id"]
+    ruta = f"/v1/clientes/{cliente_id}/consentimientos"
 
     v1 = await client.post(
         ruta, json={"scope": "OPEN_DATA", "politicaVersion": "v1", "canal": "WEB"}
@@ -156,7 +156,7 @@ async def test_ciclo_de_consentimiento(client):
 
 async def test_consentimiento_para_cliente_inexistente_devuelve_404(client):
     resp = await client.post(
-        "/clientes/no-existe/consentimientos",
+        "/v1/clientes/no-existe/consentimientos",
         json={"scope": "OPEN_DATA", "politicaVersion": "v1", "canal": "WEB"},
     )
     assert resp.status_code == 404

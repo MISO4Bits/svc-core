@@ -44,6 +44,30 @@ class EstadoConsentimiento(StrEnum):
     NO_OTORGADO = "NO_OTORGADO"
 
 
+class TipoEvidencia(StrEnum):
+    """Qué evidencia de identidad se sube (BITS-275). Los valores son los del contrato."""
+
+    CEDULA_FRENTE = "cedula_frente"
+    CEDULA_REVERSO = "cedula_reverso"
+    SELFIE = "selfie"
+
+
+class EstadoEvidencia(StrEnum):
+    """Veredicto del verificador. Solo ``ACEPTADA`` y ``REVISION_MANUAL`` se persisten."""
+
+    ACEPTADA = "ACEPTADA"
+    REINTENTAR = "REINTENTAR"
+    REVISION_MANUAL = "REVISION_MANUAL"
+
+
+class MotivoRechazo(StrEnum):
+    BORROSA = "BORROSA"
+    OSCURA = "OSCURA"
+    REFLEJO = "REFLEJO"
+    RECORTADA = "RECORTADA"
+    NO_ES_CEDULA = "NO_ES_CEDULA"
+
+
 class Canal(StrEnum):
     WEB = "WEB"
     MOVIL = "MOVIL"
@@ -86,6 +110,50 @@ class Consentimiento:
     def vigente(self) -> bool:
         """El estado efectivo habilita el acceso a datos del scope."""
         return self.estado is EstadoConsentimiento.OTORGADO
+
+
+@dataclass
+class Evidencia:
+    """Foto de identidad aceptada de un cliente. Inmutable salvo ``reemplazada_en``/``poliza_ref``.
+
+    *Vigente* = ni reemplazada por otra captura ni consumida por una póliza.
+    """
+
+    cliente_id: str
+    tipo: TipoEvidencia
+    estado: EstadoEvidencia
+    almacen_ref: str
+    id: str = field(default_factory=new_id)
+    creada_en: datetime = field(default_factory=now_utc)
+    reemplazada_en: datetime | None = None
+    poliza_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class Veredicto:
+    """Resultado del verificador sobre una imagen. Nunca lleva el número leído."""
+
+    estado: EstadoEvidencia
+    motivo: MotivoRechazo | None = None
+
+
+@dataclass(frozen=True)
+class ResultadoSubida:
+    """Lo que devuelve subir una evidencia. ``evidencia`` es ``None`` si hay que reintentar."""
+
+    estado: EstadoEvidencia
+    motivo: MotivoRechazo | None
+    intentos_restantes: int
+    evidencia: Evidencia | None = None
+
+
+@dataclass(frozen=True)
+class EstadoTipoEvidencia:
+    """Estado vigente de un tipo de evidencia: ``evidencia`` es ``None`` si está pendiente."""
+
+    tipo: TipoEvidencia
+    intentos_restantes: int
+    evidencia: Evidencia | None = None
 
 
 @dataclass(frozen=True)
@@ -151,3 +219,13 @@ class ConsentimientoNoEncontrado(DomainError):
         super().__init__(f"Consentimiento {scope} del cliente {cliente_id} no encontrado")
         self.cliente_id = cliente_id
         self.scope = str(scope)
+
+
+class ImagenInvalida(DomainError):
+    """El archivo no es una imagen JPEG o PNG decodificable."""
+
+
+class ImagenMuyGrande(DomainError):
+    def __init__(self, limite_bytes: int) -> None:
+        super().__init__(f"La imagen supera el máximo de {limite_bytes} bytes")
+        self.limite_bytes = limite_bytes

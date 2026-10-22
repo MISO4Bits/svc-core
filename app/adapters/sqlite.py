@@ -21,7 +21,10 @@ from app.domain import (
     ConsentimientoScope,
     EstadoCliente,
     EstadoConsentimiento,
+    EstadoEvidencia,
+    Evidencia,
     TipoDocumento,
+    TipoEvidencia,
     now_utc,
 )
 from app.logging_utils import sanear_para_log
@@ -60,6 +63,23 @@ CREATE TABLE IF NOT EXISTS consentimientos (
     revocado_en TEXT,
     actualizado_en TEXT NOT NULL,
     PRIMARY KEY (cliente_id, scope)
+);
+CREATE TABLE IF NOT EXISTS evidencias (
+    id TEXT PRIMARY KEY,
+    cliente_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    estado TEXT NOT NULL,
+    almacen_ref TEXT NOT NULL,
+    creada_en TEXT NOT NULL,
+    reemplazada_en TEXT,
+    poliza_ref TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_evidencias_vigentes ON evidencias (cliente_id, tipo);
+CREATE TABLE IF NOT EXISTS evidencia_rechazos (
+    cliente_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    total INTEGER NOT NULL,
+    PRIMARY KEY (cliente_id, tipo)
 );
 CREATE TABLE IF NOT EXISTS idempotencia (
     clave TEXT PRIMARY KEY,
@@ -315,6 +335,113 @@ class SqliteConsentimientoRepository:
             consentimiento.version,
         )
         return consentimiento
+
+
+def _row_to_evidencia(row: aiosqlite.Row) -> Evidencia:
+    return Evidencia(
+        id=row["id"],
+        cliente_id=row["cliente_id"],
+        tipo=TipoEvidencia(row["tipo"]),
+        estado=EstadoEvidencia(row["estado"]),
+        almacen_ref=row["almacen_ref"],
+        creada_en=_dt(row["creada_en"]),
+        reemplazada_en=_dt(row["reemplazada_en"]),
+        poliza_ref=row["poliza_ref"],
+    )
+
+
+_VIGENTE = "reemplazada_en IS NULL AND poliza_ref IS NULL"
+
+
+class SqliteEvidenciaRepository:
+    def __init__(self, db: SqliteDatabase) -> None:
+        self._db = db
+
+    async def vigente(self, cliente_id: str, tipo: TipoEvidencia) -> Evidencia | None:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"SELECT * FROM evidencias WHERE cliente_id = ? AND tipo = ? AND {_VIGENTE} "
+                "ORDER BY creada_en DESC LIMIT 1",
+                (cliente_id, str(tipo)),
+            )
+            row = await cursor.fetchone()
+        return _row_to_evidencia(row) if row else None
+
+    async def guardar_reemplazando(self, evidencia: Evidencia) -> Evidencia:
+        async with self._db.connect() as conn:
+            await conn.execute(
+                f"UPDATE evidencias SET reemplazada_en = ? "
+                f"WHERE cliente_id = ? AND tipo = ? AND {_VIGENTE}",
+                (_iso(now_utc()), evidencia.cliente_id, str(evidencia.tipo)),
+            )
+            await conn.execute(
+                """
+                INSERT INTO evidencias (
+                    id, cliente_id, tipo, estado, almacen_ref, creada_en, reemplazada_en, poliza_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evidencia.id,
+                    evidencia.cliente_id,
+                    str(evidencia.tipo),
+                    str(evidencia.estado),
+                    evidencia.almacen_ref,
+                    _iso(evidencia.creada_en),
+                    _iso(evidencia.reemplazada_en),
+                    evidencia.poliza_ref,
+                ),
+            )
+            await conn.commit()
+        logger.info(
+            "sqlite: evidencia guardada cliente_id=%s tipo=%s estado=%s",
+            sanear_para_log(evidencia.cliente_id),
+            evidencia.tipo,
+            evidencia.estado,
+        )
+        return evidencia
+
+    async def consumir(self, cliente_id: str, poliza_ref: str) -> int:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"UPDATE evidencias SET poliza_ref = ? WHERE cliente_id = ? AND {_VIGENTE}",
+                (poliza_ref, cliente_id),
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+    async def rechazos(self, cliente_id: str, tipo: TipoEvidencia) -> int:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "SELECT total FROM evidencia_rechazos WHERE cliente_id = ? AND tipo = ?",
+                (cliente_id, str(tipo)),
+            )
+            row = await cursor.fetchone()
+        return row["total"] if row else 0
+
+    async def registrar_rechazo(self, cliente_id: str, tipo: TipoEvidencia) -> int:
+        async with self._db.connect() as conn:
+            await conn.execute(
+                """
+                INSERT INTO evidencia_rechazos (cliente_id, tipo, total) VALUES (?, ?, 1)
+                ON CONFLICT (cliente_id, tipo) DO UPDATE SET total = total + 1
+                """,
+                (cliente_id, str(tipo)),
+            )
+            await conn.commit()
+            cursor = await conn.execute(
+                "SELECT total FROM evidencia_rechazos WHERE cliente_id = ? AND tipo = ?",
+                (cliente_id, str(tipo)),
+            )
+            row = await cursor.fetchone()
+        return row["total"]
+
+    async def reiniciar_rechazos(self, cliente_id: str, tipo: TipoEvidencia) -> None:
+        async with self._db.connect() as conn:
+            await conn.execute(
+                "DELETE FROM evidencia_rechazos WHERE cliente_id = ? AND tipo = ?",
+                (cliente_id, str(tipo)),
+            )
+            await conn.commit()
 
 
 class SqliteIdempotencyStore:

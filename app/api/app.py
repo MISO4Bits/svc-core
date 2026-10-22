@@ -9,13 +9,16 @@ from fastapi.responses import FileResponse
 
 from app.adapters.factory import (
     build_event_publisher,
+    build_evidencias,
     build_notificaciones,
     build_repositories,
     maybe_init,
 )
 from app.api.errors import install_error_handlers
+from app.api.evidencias import router as evidencias_router
 from app.api.routes import router
 from app.config import Settings, get_settings
+from app.evidencias import EvidenciaService
 from app.logging_utils import SinRuidoDeHealthCheck
 from app.services import IdentityService
 from app.telemetry import agregar_encabezado_trace_id, setup_telemetry, shutdown_telemetry
@@ -32,10 +35,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     events = build_event_publisher(settings)
     service = IdentityService(clientes, consentimientos, events)
     notificaciones, cerrables = build_notificaciones(settings, events)
+    repo_evidencias, almacen, verificador = build_evidencias(settings)
+    evidencias = EvidenciaService(
+        clientes,
+        repo_evidencias,
+        almacen,
+        verificador,
+        max_bytes=settings.evidencia_max_bytes,
+        max_pixeles=settings.evidencia_max_pixeles,
+        intentos_max=settings.evidencia_intentos_max,
+        timeout_s=settings.verificador_timeout_s,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        for adapter in (clientes, consentimientos, idempotency):
+        for adapter in (clientes, consentimientos, idempotency, repo_evidencias):
             await maybe_init(adapter)
         yield
         for adaptador in cerrables:
@@ -56,9 +70,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.idempotency = idempotency
     app.state.events = events
     app.state.notificaciones = notificaciones
+    app.state.evidencias = evidencias
 
     install_error_handlers(app)
-    app.include_router(router)
+    app.include_router(router, prefix="/v1")
+    app.include_router(evidencias_router, prefix="/v1")  # solo versionado, sin alias
+    # Alias temporal sin versión (BITS-275): permite desplegar svc-core antes de que
+    # bff-web y bff-mobile llamen a /v1. Se retira cuando ambos ya migraron.
+    app.include_router(router, include_in_schema=False)
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:
