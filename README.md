@@ -61,6 +61,31 @@ son **provisionales**: se calibran con fotos reales usando
 `python tools/calibrar_calidad.py --buenas <carpeta> --malas <carpeta>`. Las fotos de cédulas son datos
 personales: no se suben al repositorio.
 
+#### Selfie: prueba de vida y comparación con la cédula (BITS-235)
+
+La selfie se compara con el frente de la cédula ya guardado, así que primero deben estar vigentes
+**ambas caras** de la cédula (si no, `422`). Con `CORE_BIOMETRIA_BACKEND=local` el servidor revisa calidad,
+que haya un solo rostro, que sea una persona real (prueba de vida pasiva) y que coincida con la cédula,
+todo con modelos de OpenCV dentro del pod. Nivel básico, no certificado: no cubre cámaras virtuales ni
+*deepfakes*. Los puntajes se guardan con la evidencia pero **no salen en la respuesta**.
+
+| Variable | Default | Notas |
+|---|---|---|
+| `CORE_BIOMETRIA_BACKEND` | `mock` | `mock` \| `local` (modelos de OpenCV en el propio proceso) |
+| `CORE_BIOMETRIA_MOCK_SECUENCIA` | `ACEPTADA` | como la del verificador de documentos, con los motivos `SIN_ROSTRO`, `VARIOS_ROSTROS`, `POSIBLE_SUPLANTACION`, `NO_COINCIDE_CON_CEDULA` |
+| `CORE_BIOMETRIA_TIMEOUT_S` | `5.0` | si tarda más, la selfie pasa a revisión manual |
+| `CORE_BIOMETRIA_MAX_CONCURRENTES` | `1` | análisis simultáneos por pod |
+| `CORE_BIOMETRIA_MODELOS_RUTA` | `./models` | carpeta de los modelos; se cargan al arrancar y, si faltan, el servicio no arranca |
+| `CORE_BIOMETRIA_VIDA_ACEPTAR` / `_RECHAZAR` | `0.80` / `0.40` | probabilidad de rostro real: sobre el primero se acepta, bajo el segundo se rechaza, en medio decide una persona |
+| `CORE_BIOMETRIA_COINCIDENCIA_ACEPTAR` / `_RECHAZAR` | `0.40` / `0.25` | similitud coseno de SFace (la referencia de OpenCV para "misma persona" es ~0,36) |
+| `CORE_BIOMETRIA_DETECCION_MIN` / `_ROSTRO_MIN` | `0.70` / `0.15` | confianza mínima del detector y tamaño mínimo del rostro (fracción del ancho) |
+
+Los modelos (origen y licencias en [models/README.md](models/README.md)): tres van en el repositorio y
+SFace (~37 MB) se baja con `python tools/descargar_modelos.py` (la imagen de Docker y el CI lo hacen solos).
+Los umbrales son **provisionales**: se calibran con fotos reales usando
+`python tools/calibrar_biometria.py --frente cedula.jpg --propias <carpeta> --ajenas <carpeta> --ataques <carpeta>`
+(el servidor deja en el log los puntajes y la duración de cada etapa).
+
 Con `CORE_NOTIFICACIONES_BACKEND=fake` y `CORE_EVENT_BACKEND=logging`, cada registro deja en el log
 la publicación de los dos eventos `EnviarCorreo`, sin necesitar Productos ni Identity Platform.
 

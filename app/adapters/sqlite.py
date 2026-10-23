@@ -72,7 +72,9 @@ CREATE TABLE IF NOT EXISTS evidencias (
     almacen_ref TEXT NOT NULL,
     creada_en TEXT NOT NULL,
     reemplazada_en TEXT,
-    poliza_ref TEXT
+    poliza_ref TEXT,
+    puntaje_vida REAL,
+    puntaje_coincidencia REAL
 );
 CREATE INDEX IF NOT EXISTS idx_evidencias_vigentes ON evidencias (cliente_id, tipo);
 CREATE TABLE IF NOT EXISTS evidencia_rechazos (
@@ -112,6 +114,9 @@ class SqliteDatabase:
             for ddl in (
                 "ALTER TABLE clientes ADD COLUMN correo_confirmado INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE clientes ADD COLUMN confirmado_en TEXT",
+                # BITS-235: puntajes de la selfie, en bases de dev anteriores.
+                "ALTER TABLE evidencias ADD COLUMN puntaje_vida REAL",
+                "ALTER TABLE evidencias ADD COLUMN puntaje_coincidencia REAL",
             ):
                 try:
                     await conn.execute(ddl)
@@ -347,6 +352,8 @@ def _row_to_evidencia(row: aiosqlite.Row) -> Evidencia:
         creada_en=_dt(row["creada_en"]),
         reemplazada_en=_dt(row["reemplazada_en"]),
         poliza_ref=row["poliza_ref"],
+        puntaje_vida=row["puntaje_vida"],
+        puntaje_coincidencia=row["puntaje_coincidencia"],
     )
 
 
@@ -377,8 +384,9 @@ class SqliteEvidenciaRepository:
             await conn.execute(
                 """
                 INSERT INTO evidencias (
-                    id, cliente_id, tipo, estado, almacen_ref, creada_en, reemplazada_en, poliza_ref
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, cliente_id, tipo, estado, almacen_ref, creada_en, reemplazada_en,
+                    poliza_ref, puntaje_vida, puntaje_coincidencia
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     evidencia.id,
@@ -389,6 +397,8 @@ class SqliteEvidenciaRepository:
                     _iso(evidencia.creada_en),
                     _iso(evidencia.reemplazada_en),
                     evidencia.poliza_ref,
+                    evidencia.puntaje_vida,
+                    evidencia.puntaje_coincidencia,
                 ),
             )
             await conn.commit()

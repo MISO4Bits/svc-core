@@ -34,6 +34,13 @@ RUN chown app:app /app
 COPY --from=build /opt/venv /opt/venv
 COPY --chown=app:app app ./app
 COPY --chown=app:app openapi ./openapi
+# Modelos de biometría (BITS-235): los pequeños van en el repositorio y SFace (~37 MB) se baja
+# aquí, con verificación de suma de control. Dentro de la imagen, sin depender de la red al arrancar.
+COPY --chown=app:app models ./models
+COPY tools/descargar_modelos.py /tmp/descargar_modelos.py
+RUN python /tmp/descargar_modelos.py /app/models \
+    && rm /tmp/descargar_modelos.py \
+    && chown -R app:app /app/models
 
 USER app
 EXPOSE 8080

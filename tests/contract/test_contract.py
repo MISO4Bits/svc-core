@@ -160,3 +160,28 @@ async def test_expone_el_contrato(client, ruta):
     resp = await client.get(ruta)
     assert resp.status_code == 200
     assert "openapi" in resp.text
+
+
+async def test_la_selfie_cumple_el_esquema_y_el_422_es_problem_details(client, openapi_spec):
+    cliente_id = (await client.post("/v1/clientes", json=CLIENTE_VALIDO)).json()["id"]
+    ruta = f"/v1/clientes/{cliente_id}/evidencias-identidad"
+    foto = ("foto.jpg", imagenes.a_bytes(imagenes.sin_tarjeta()), "image/jpeg")
+
+    sin_cedula = await client.post(ruta, data={"tipo": "selfie"}, files={"imagen": foto})
+    assert sin_cedula.status_code == 422
+    assert sin_cedula.headers["content-type"].startswith("application/problem+json")
+    _assert_valid(openapi_spec, "Problema", sin_cedula.json())
+
+    for tipo in ("cedula_frente", "cedula_reverso"):
+        await client.post(ruta, data={"tipo": tipo}, files={"imagen": foto})
+    selfie = await client.post(ruta, data={"tipo": "selfie"}, files={"imagen": foto})
+    assert selfie.status_code == 201
+    _assert_valid(openapi_spec, "EvidenciaSubida", selfie.json())
+
+
+def test_los_motivos_del_contrato_son_los_del_dominio(openapi_spec):
+    from app.domain import MotivoRechazo
+
+    assert set(openapi_spec["components"]["schemas"]["MotivoRechazo"]["enum"]) == {
+        m.value for m in MotivoRechazo
+    }

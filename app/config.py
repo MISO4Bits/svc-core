@@ -68,6 +68,28 @@ class Settings(BaseSettings):
     calidad_tarjeta_area_min: float = 0.25
     calidad_margen_borde: float = 0.01
 
+    # Prueba de vida y comparación de la selfie con la cédula (BITS-235).
+    # "mock" (veredictos configurables) | "local" (modelos de OpenCV dentro del pod).
+    biometria_backend: str = "mock"
+    # Igual que verificador_mock_secuencia, con los motivos de la selfie (SIN_ROSTRO,
+    # VARIOS_ROSTROS, POSIBLE_SUPLANTACION, NO_COINCIDE_CON_CEDULA).
+    biometria_mock_secuencia: str = "ACEPTADA"
+    biometria_timeout_s: float = 5.0
+    # Los modelos de visión usan mucho procesador y comparten pod con las transacciones.
+    biometria_max_concurrentes: int = 1
+    biometria_modelos_ruta: str = "./models"
+    # Dos umbrales por puntaje: sobre "aceptar" pasa, bajo "rechazar" se pide repetir y en
+    # medio decide una persona. Provisionales hasta calibrarlos con fotos reales
+    # (tools/calibrar_biometria.py). Vida: probabilidad de rostro real, 0 a 1. Coincidencia:
+    # similitud coseno de SFace (la referencia de OpenCV para "misma persona" es ~0,36).
+    biometria_vida_aceptar: float = 0.80
+    biometria_vida_rechazar: float = 0.40
+    biometria_coincidencia_aceptar: float = 0.40
+    biometria_coincidencia_rechazar: float = 0.25
+    # Confianza mínima del detector de rostros y tamaño mínimo del rostro (fracción del ancho).
+    biometria_deteccion_min: float = 0.70
+    biometria_rostro_min: float = 0.15
+
     # Observabilidad (DI-008): OTLP/gRPC hacia Grafana Alloy dentro del
     # cluster. Deshabilitado por defecto — en local/tests no hay receptor
     # escuchando; se habilita vía CORE_OTEL_ENABLED=true en el manifiesto de

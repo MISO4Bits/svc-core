@@ -297,6 +297,16 @@ paths:
 
         Las fotos rechazadas no se guardan. Las aceptadas se conservan mientras viva la póliza
         que las referencie; una evidencia consumida por una póliza no se reutiliza en otra.
+
+        **Selfie (`tipo = selfie`).** Se compara con el frente de la cédula ya guardado, así que
+        ambas caras deben estar vigentes (`ACEPTADA` o `REVISION_MANUAL`); si no, responde **422**
+        y no cuenta como intento. El servidor revisa la calidad, que haya un solo rostro, que sea
+        una persona real (prueba de vida pasiva) y que coincida con el de la cédula. Cada puntaje
+        tiene dos umbrales: bajo el inferior se rechaza (`SIN_ROSTRO`, `VARIOS_ROSTROS`,
+        `POSIBLE_SUPLANTACION`, `NO_COINCIDE_CON_CEDULA`, además de `BORROSA` y `OSCURA`), sobre el
+        superior se acepta y en medio decide una persona (`REVISION_MANUAL`). Si no se halla un
+        rostro en la cédula, o la verificación tarda o falla, también va a `REVISION_MANUAL`.
+        Los puntajes se guardan para quien revise, pero no salen en la respuesta.
       requestBody:
         required: true
         content:
@@ -317,6 +327,11 @@ paths:
         '404': { $ref: '#/components/responses/NoEncontrado' }
         '413':
           description: La imagen supera el máximo permitido.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+        '422':
+          description: Se subió la selfie sin que ambas caras de la cédula estén vigentes.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problema' }
@@ -536,10 +551,25 @@ components:
       enum: [ACEPTADA, REINTENTAR, REVISION_MANUAL]
     MotivoRechazo:
       type: string
-      enum: [BORROSA, OSCURA, REFLEJO, RECORTADA, NO_ES_CEDULA]
+      enum:
+        - BORROSA
+        - OSCURA
+        - REFLEJO
+        - RECORTADA
+        - NO_ES_CEDULA
+        - SIN_ROSTRO
+        - VARIOS_ROSTROS
+        - POSIBLE_SUPLANTACION
+        - NO_COINCIDE_CON_CEDULA
       description: |
         `REFLEJO` incluye la sobreexposición global. `BORROSA` incluye la foto con muy pocos
         píxeles. `NO_ES_CEDULA` es que no se halló un rectángulo con la proporción de una tarjeta.
+
+        Los cuatro últimos son de la selfie. `SIN_ROSTRO` incluye un rostro demasiado pequeño;
+        `VARIOS_ROSTROS` es más de una persona en la foto; `POSIBLE_SUPLANTACION` es que la prueba
+        de vida pasiva no cree que sea una persona real (foto de una foto o de una pantalla);
+        `NO_COINCIDE_CON_CEDULA` es que el rostro no se parece al de la cédula.
+        Los clientes deben tolerar motivos que no conozcan.
 
     SubirEvidenciaRequest:
       type: object

@@ -63,3 +63,16 @@ def cargar_gris(datos: bytes, lado_max: int) -> tuple[np.ndarray, tuple[int, int
             return np.asarray(gris, dtype=np.uint8), tamano
     except Exception as exc:
         raise ImagenInvalida("La imagen está dañada o no se puede leer") from exc
+
+
+def cargar_bgr(datos: bytes, lado_max: int) -> np.ndarray:
+    """Imagen a color en orden BGR (el de OpenCV), orientada y reducida a ``lado_max``."""
+    try:
+        with Image.open(io.BytesIO(datos)) as imagen:
+            imagen = ImageOps.exif_transpose(imagen)
+            imagen.draft("RGB", (lado_max, lado_max))
+            color = imagen.convert("RGB")
+            color.thumbnail((lado_max, lado_max))
+            return np.ascontiguousarray(np.asarray(color, dtype=np.uint8)[:, :, ::-1])
+    except Exception as exc:
+        raise ImagenInvalida("La imagen está dañada o no se puede leer") from exc

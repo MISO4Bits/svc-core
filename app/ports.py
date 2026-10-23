@@ -120,3 +120,13 @@ class VerificadorDocumento(Protocol):
         acepta solo si el código del reverso contiene ese número; si no puede leerlo o no
         coincide, devuelve ``REVISION_MANUAL``. El número leído no sale del verificador."""
         ...
+
+
+@runtime_checkable
+class VerificadorBiometrico(Protocol):
+    async def verificar(self, selfie: bytes, frente_cedula: bytes) -> Veredicto:
+        """Decide si la selfie sirve: calidad, un solo rostro, persona real y coincidencia con
+        el rostro de la cédula. Si no hay rostro en la cédula devuelve ``REVISION_MANUAL``
+        (el problema es del documento, no del usuario). Los puntajes del veredicto no salen
+        del servicio."""
+        ...

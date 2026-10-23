@@ -66,6 +66,11 @@ class MotivoRechazo(StrEnum):
     REFLEJO = "REFLEJO"
     RECORTADA = "RECORTADA"
     NO_ES_CEDULA = "NO_ES_CEDULA"
+    # Selfie (BITS-235): rostro, prueba de vida y comparación con la cédula.
+    SIN_ROSTRO = "SIN_ROSTRO"
+    VARIOS_ROSTROS = "VARIOS_ROSTROS"
+    POSIBLE_SUPLANTACION = "POSIBLE_SUPLANTACION"
+    NO_COINCIDE_CON_CEDULA = "NO_COINCIDE_CON_CEDULA"
 
 
 class Canal(StrEnum):
@@ -127,14 +132,23 @@ class Evidencia:
     creada_en: datetime = field(default_factory=now_utc)
     reemplazada_en: datetime | None = None
     poliza_ref: str | None = None
+    # Solo la selfie. Se guardan para la revisión manual y la calibración; no salen por la API.
+    puntaje_vida: float | None = None
+    puntaje_coincidencia: float | None = None
 
 
 @dataclass(frozen=True)
 class Veredicto:
-    """Resultado del verificador sobre una imagen. Nunca lleva el número leído."""
+    """Resultado del verificador sobre una imagen. Nunca lleva el número leído.
+
+    Los puntajes solo los llena el verificador biométrico (selfie); ``None`` si no se
+    llegó a calcularlos.
+    """
 
     estado: EstadoEvidencia
     motivo: MotivoRechazo | None = None
+    puntaje_vida: float | None = None
+    puntaje_coincidencia: float | None = None
 
 
 @dataclass(frozen=True)
@@ -219,6 +233,15 @@ class ConsentimientoNoEncontrado(DomainError):
         super().__init__(f"Consentimiento {scope} del cliente {cliente_id} no encontrado")
         self.cliente_id = cliente_id
         self.scope = str(scope)
+
+
+class CedulaIncompleta(DomainError):
+    """La selfie se compara con la cédula, así que ambas caras deben estar ya en el sistema."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Para subir la selfie primero deben estar vigentes ambas caras de la cédula"
+        )
 
 
 class ImagenInvalida(DomainError):
