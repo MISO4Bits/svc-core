@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 
 from app.domain import (
+    CedulaIncompleta,
+    Cliente,
     ClienteNoEncontrado,
     EstadoEvidencia,
     EstadoTipoEvidencia,
@@ -23,6 +26,7 @@ from app.ports import (
     AlmacenEvidencias,
     ClienteRepository,
     EvidenciaRepository,
+    VerificadorBiometrico,
     VerificadorDocumento,
 )
 
@@ -44,6 +48,8 @@ class EvidenciaService:
         max_pixeles: int,
         intentos_max: int,
         timeout_s: float,
+        biometria: VerificadorBiometrico | None = None,
+        biometria_timeout_s: float = 5.0,
     ) -> None:
         self._clientes = clientes
         self._evidencias = evidencias
@@ -53,6 +59,9 @@ class EvidenciaService:
         self._max_pixeles = max_pixeles
         self._intentos_max = intentos_max
         self._timeout_s = timeout_s
+        # Sin verificador biométrico la selfie solo pasa la revisión de calidad del de documentos.
+        self._biometria = biometria
+        self._biometria_timeout_s = biometria_timeout_s
 
     async def subir(self, cliente_id: str, tipo: TipoEvidencia, imagen: bytes) -> ResultadoSubida:
         cliente = await self._clientes.obtener(cliente_id)
@@ -62,19 +71,10 @@ class EvidenciaService:
             imagen, max_bytes=self.max_bytes, max_pixeles=self._max_pixeles
         )
 
-        # El cruce con el número registrado solo existe para la cédula de ciudadanía: es el
-        # único documento cuyo reverso sabemos leer.
-        es_cc = cliente.tipo_documento is TipoDocumento.CC
-        cruzar = tipo is TipoEvidencia.CEDULA_REVERSO and es_cc
-        veredicto = await self._verificar(
-            imagen, tipo, cliente.numero_documento if cruzar else None
-        )
-        if (
-            tipo is not TipoEvidencia.SELFIE
-            and not es_cc
-            and veredicto.estado is EstadoEvidencia.ACEPTADA
-        ):
-            veredicto = Veredicto(EstadoEvidencia.REVISION_MANUAL)
+        if tipo is TipoEvidencia.SELFIE and self._biometria is not None:
+            veredicto = await self._verificar_selfie(cliente_id, imagen)
+        else:
+            veredicto = await self._verificar_documento(cliente, tipo, imagen)
 
         cliente_log = sanear_para_log(cliente_id)
         if veredicto.estado is EstadoEvidencia.REINTENTAR:
@@ -94,7 +94,7 @@ class EvidenciaService:
                 )
             # Tercer rechazo: no se atrapa al usuario; esta foto sí se guarda para que una
             # persona la revise.
-            veredicto = Veredicto(EstadoEvidencia.REVISION_MANUAL)
+            veredicto = replace(veredicto, estado=EstadoEvidencia.REVISION_MANUAL, motivo=None)
 
         evidencia_id = new_id()
         referencia = await self._almacen.guardar(
@@ -109,6 +109,8 @@ class EvidenciaService:
                 tipo=tipo,
                 estado=veredicto.estado,
                 almacen_ref=referencia,
+                puntaje_vida=veredicto.puntaje_vida,
+                puntaje_coincidencia=veredicto.puntaje_coincidencia,
             )
         )
         await self._evidencias.reiniciar_rechazos(cliente_id, tipo)
@@ -124,6 +126,43 @@ class EvidenciaService:
             intentos_restantes=self._intentos_max,  # el contador se reinicia al guardar
             evidencia=evidencia,
         )
+
+    async def _verificar_documento(
+        self, cliente: Cliente, tipo: TipoEvidencia, imagen: bytes
+    ) -> Veredicto:
+        # El cruce con el número registrado solo existe para la cédula de ciudadanía: es el
+        # único documento cuyo reverso sabemos leer.
+        es_cc = cliente.tipo_documento is TipoDocumento.CC
+        cruzar = tipo is TipoEvidencia.CEDULA_REVERSO and es_cc
+        veredicto = await self._verificar(
+            imagen, tipo, cliente.numero_documento if cruzar else None
+        )
+        if (
+            tipo is not TipoEvidencia.SELFIE
+            and not es_cc
+            and veredicto.estado is EstadoEvidencia.ACEPTADA
+        ):
+            veredicto = Veredicto(EstadoEvidencia.REVISION_MANUAL)
+        return veredicto
+
+    async def _verificar_selfie(self, cliente_id: str, selfie: bytes) -> Veredicto:
+        """Compara la selfie con el frente de la cédula ya guardado. Falla hacia "seguir"."""
+        frente = await self._evidencias.vigente(cliente_id, TipoEvidencia.CEDULA_FRENTE)
+        reverso = await self._evidencias.vigente(cliente_id, TipoEvidencia.CEDULA_REVERSO)
+        if frente is None or reverso is None:
+            raise CedulaIncompleta()
+        if not {frente.estado, reverso.estado} <= set(_ACEPTADAS):
+            raise CedulaIncompleta()
+        try:
+            foto_frente = await self._almacen.obtener(frente.almacen_ref)
+            return await asyncio.wait_for(
+                self._biometria.verificar(selfie, foto_frente), self._biometria_timeout_s
+            )
+        except TimeoutError:
+            logger.warning("verificar_selfie: tiempo agotado, pasa a revisión manual")
+        except Exception:
+            logger.exception("verificar_selfie: falló la verificación, pasa a revisión manual")
+        return Veredicto(EstadoEvidencia.REVISION_MANUAL)
 
     async def _verificar(
         self, imagen: bytes, tipo: TipoEvidencia, numero_esperado: str | None

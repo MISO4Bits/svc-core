@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from app.adapters.factory import (
+    build_biometria,
     build_event_publisher,
     build_evidencias,
     build_notificaciones,
@@ -36,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     service = IdentityService(clientes, consentimientos, events)
     notificaciones, cerrables = build_notificaciones(settings, events)
     repo_evidencias, almacen, verificador = build_evidencias(settings)
+    biometria = build_biometria(settings)
     evidencias = EvidenciaService(
         clientes,
         repo_evidencias,
@@ -45,12 +48,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_pixeles=settings.evidencia_max_pixeles,
         intentos_max=settings.evidencia_intentos_max,
         timeout_s=settings.verificador_timeout_s,
+        biometria=biometria,
+        biometria_timeout_s=settings.biometria_timeout_s,
     )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         for adapter in (clientes, consentimientos, idempotency, repo_evidencias):
             await maybe_init(adapter)
+        precargar = getattr(biometria, "precargar", None)
+        if precargar is not None:
+            # Cargar los modelos ahora, no en la primera selfie (que agotaría el tiempo límite).
+            await asyncio.to_thread(precargar)
         yield
         for adaptador in cerrables:
             await adaptador.aclose()

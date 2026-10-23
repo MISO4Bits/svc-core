@@ -18,7 +18,7 @@ from app.adapters.sqlite import (
     SqliteEvidenciaRepository,
     SqliteIdempotencyStore,
 )
-from app.adapters.verificador_mock import VerificadorMock
+from app.adapters.verificador_mock import VerificadorBiometricoMock, VerificadorMock
 from app.calidad_imagen import UmbralesCalidad
 from app.config import Settings
 from app.notificaciones import NotificacionService
@@ -29,6 +29,7 @@ from app.ports import (
     EventPublisher,
     EvidenciaRepository,
     IdempotencyStore,
+    VerificadorBiometrico,
     VerificadorDocumento,
 )
 
@@ -90,6 +91,24 @@ def build_evidencias(
     else:
         raise ValueError(f"verificador_backend no soportado: {settings.verificador_backend}")
     return repositorio, almacen, verificador
+
+
+def build_biometria(settings: Settings) -> VerificadorBiometrico:
+    """Verificador de la selfie (prueba de vida y comparación con la cédula)."""
+    if settings.biometria_backend == "mock":
+        return VerificadorBiometricoMock(settings.biometria_mock_secuencia)
+    if settings.biometria_backend == "local":
+        # Import diferido, como el verificador de documentos: cargar OpenCV solo si se usa.
+        from app.adapters.verificador_biometrico import VerificadorBiometricoLocal
+        from app.biometria import UmbralesBiometria
+
+        return VerificadorBiometricoLocal(
+            UmbralesCalidad.desde(settings),
+            UmbralesBiometria.desde(settings),
+            ruta_modelos=settings.biometria_modelos_ruta,
+            max_concurrentes=settings.biometria_max_concurrentes,
+        )
+    raise ValueError(f"biometria_backend no soportado: {settings.biometria_backend}")
 
 
 def build_event_publisher(settings: Settings) -> EventPublisher:

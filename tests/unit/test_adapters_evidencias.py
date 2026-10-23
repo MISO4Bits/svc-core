@@ -13,6 +13,7 @@ from app.adapters.sqlite import SqliteDatabase, SqliteEvidenciaRepository
 from app.domain import EstadoEvidencia, Evidencia, TipoEvidencia
 
 FRENTE, REVERSO = TipoEvidencia.CEDULA_FRENTE, TipoEvidencia.CEDULA_REVERSO
+SELFIE = TipoEvidencia.SELFIE
 CLIENTE, OTRO = "cliente-1", "cliente-2"
 
 
@@ -177,3 +178,44 @@ async def test_el_almacen_gcs_guarda_con_su_tipo_y_recupera():
     assert cliente.bucket_pedido == "solventa-evidencias"
     assert cliente.almacenados["evidencias/c1/e1.png"] == (b"datos", "image/png")
     assert await almacen.obtener(ref) == b"datos"
+
+
+async def test_los_puntajes_de_la_selfie_se_guardan_y_se_leen(repo):
+    await repo.guardar_reemplazando(
+        _evidencia(SELFIE, puntaje_vida=0.91, puntaje_coincidencia=0.55)
+    )
+
+    vigente = await repo.vigente(CLIENTE, SELFIE)
+
+    assert vigente is not None
+    assert (vigente.puntaje_vida, vigente.puntaje_coincidencia) == (0.91, 0.55)
+
+
+async def test_una_evidencia_sin_puntajes_los_devuelve_vacios(repo):
+    await repo.guardar_reemplazando(_evidencia(FRENTE))
+
+    vigente = await repo.vigente(CLIENTE, FRENTE)
+
+    assert vigente is not None
+    assert (vigente.puntaje_vida, vigente.puntaje_coincidencia) == (None, None)
+
+
+async def test_una_base_anterior_sin_las_columnas_de_puntajes_se_migra(tmp_path):
+    import aiosqlite
+
+    ruta = str(tmp_path / "vieja.db")
+    async with aiosqlite.connect(ruta) as conn:
+        await conn.execute(
+            "CREATE TABLE evidencias (id TEXT PRIMARY KEY, cliente_id TEXT NOT NULL, "
+            "tipo TEXT NOT NULL, estado TEXT NOT NULL, almacen_ref TEXT NOT NULL, "
+            "creada_en TEXT NOT NULL, reemplazada_en TEXT, poliza_ref TEXT)"
+        )
+        await conn.commit()
+    db = SqliteDatabase(ruta)
+    await db.init()
+    repositorio = SqliteEvidenciaRepository(db)
+
+    await repositorio.guardar_reemplazando(_evidencia(SELFIE, puntaje_vida=0.7))
+
+    vigente = await repositorio.vigente(CLIENTE, SELFIE)
+    assert vigente is not None and vigente.puntaje_vida == 0.7

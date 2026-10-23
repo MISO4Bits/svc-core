@@ -31,3 +31,13 @@ class VerificadorMock:
         self, imagen: bytes, tipo: TipoEvidencia, numero_esperado: str | None
     ) -> Veredicto:
         return next(self._veredictos)
+
+
+class VerificadorBiometricoMock:
+    """Mismo mecanismo que ``VerificadorMock``, para la selfie: no mira ninguna imagen."""
+
+    def __init__(self, secuencia: str = "ACEPTADA") -> None:
+        self._veredictos = VerificadorMock(secuencia)
+
+    async def verificar(self, selfie: bytes, frente_cedula: bytes) -> Veredicto:
+        return await self._veredictos.analizar(selfie, TipoEvidencia.SELFIE, None)

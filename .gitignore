@@ -235,3 +235,6 @@ gha-creds-*.json
 
 # Fotos de identidad del almacén local de desarrollo (datos personales)
 /evidencias/
+
+# Modelo grande de biometría: se baja con tools/descargar_modelos.py
+models/face_recognition_sface_*.onnx

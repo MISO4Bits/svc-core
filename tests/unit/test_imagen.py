@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from app.domain import ImagenInvalida, ImagenMuyGrande
-from app.imagen import cargar_gris, tipo_de_contenido, validar_imagen
+from app.imagen import cargar_bgr, cargar_gris, tipo_de_contenido, validar_imagen
 from tests import imagenes
 
 LIMITES = {"max_bytes": 3_000_000, "max_pixeles": 40_000_000}
@@ -82,3 +82,32 @@ def test_cargar_gris_aplica_la_orientacion_de_la_camara():
 def test_cargar_gris_falla_con_bytes_dañados():
     with pytest.raises(ImagenInvalida):
         cargar_gris(b"no es una imagen", 1000)
+
+
+def test_cargar_bgr_devuelve_los_canales_en_el_orden_de_opencv():
+    roja = Image.new("RGB", (100, 50), (255, 0, 0))
+    salida = io.BytesIO()
+    roja.save(salida, "PNG")
+
+    bgr = cargar_bgr(salida.getvalue(), 1000)
+
+    assert bgr.shape == (50, 100, 3)
+    assert tuple(bgr[0, 0]) == (0, 0, 255)  # azul, verde, rojo
+    assert bgr.flags["C_CONTIGUOUS"]
+
+
+def test_cargar_bgr_reduce_al_lado_pedido_y_aplica_la_orientacion():
+    foto = Image.new("RGB", (1600, 800), "white")
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    salida = io.BytesIO()
+    foto.save(salida, "JPEG", exif=exif)
+
+    bgr = cargar_bgr(salida.getvalue(), 400)
+
+    assert bgr.shape[:2] == (400, 200)
+
+
+def test_cargar_bgr_falla_con_bytes_dañados():
+    with pytest.raises(ImagenInvalida):
+        cargar_bgr(b"no es una imagen", 1000)
