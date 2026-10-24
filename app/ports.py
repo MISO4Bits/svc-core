@@ -20,6 +20,7 @@ from app.domain import (
     Pendiente,
     PlantillaCorreo,
     Poliza,
+    ReferenciaDocumento,
     TipoCorreo,
     TipoEvidencia,
     Veredicto,
@@ -196,6 +197,15 @@ class PolizaRepository(Protocol):
         """Pasa a ``RECHAZADA`` (solo si sigue ``PENDIENTE``). ``None`` si ya no lo estaba."""
         ...
 
+    async def reclamar_envio_documento(self, poliza_id: str, cuando: datetime) -> bool:
+        """Marca que se va a enviar el correo con el PDF. ``True`` solo la primera vez: así una
+        reentrega del aviso no manda el correo dos veces."""
+        ...
+
+    async def liberar_envio_documento(self, poliza_id: str) -> None:
+        """Deshace el reclamo si el correo no se pudo encargar, para que se reintente."""
+        ...
+
     async def borrar_pendientes_de_cliente(
         self, cliente_id: str, salvo_cotizacion: datetime | None
     ) -> int:
@@ -214,7 +224,18 @@ class CotizacionPort(Protocol):
 
 @runtime_checkable
 class DocumentoPolizaPort(Protocol):
-    async def consultar(self, poliza: Poliza) -> DocumentoPoliza:
-        """Estado del documento de una póliza emitida: ``GENERANDO`` o ``LISTO`` con enlace
-        temporal. Lanza ``DocumentoNoDisponible`` si el servicio de documentos no responde."""
+    async def consultar(self, datos: dict) -> DocumentoPoliza:
+        """Enlace temporal para ver el PDF de una póliza emitida. ``datos`` es lo mismo que viaja
+        en ``PolizaEmitida``: si el documento no existe, el servicio de documentos lo genera.
+        Lanza ``DocumentoNoDisponible`` si no responde."""
+        ...
+
+
+@runtime_checkable
+class CorreosDePolizaPort(Protocol):
+    async def enviar_poliza_emitida(
+        self, cliente: Cliente, numero: str, documento: ReferenciaDocumento
+    ) -> None:
+        """Encarga el correo con el PDF adjunto. A diferencia de los del registro, un fallo se
+        propaga: quien llama reintenta."""
         ...

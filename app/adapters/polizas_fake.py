@@ -14,7 +14,6 @@ from app.domain import (
     DocumentoPoliza,
     EstadoDocumentoPoliza,
     OrigenDatos,
-    Poliza,
     Vigencia,
     now_utc,
 )
@@ -89,9 +88,9 @@ class CotizacionFake:
 class DocumentoPolizaFake:
     """El documento siempre está listo, con un enlace de mentira."""
 
-    async def consultar(self, poliza: Poliza) -> DocumentoPoliza:
+    async def consultar(self, datos: dict) -> DocumentoPoliza:
         return DocumentoPoliza(
             EstadoDocumentoPoliza.LISTO,
-            url=f"https://documentos.local/{poliza.numero}.pdf",
+            url=f"https://documentos.local/{datos['numero']}.pdf",
             expira_en=now_utc() + timedelta(minutes=15),
         )

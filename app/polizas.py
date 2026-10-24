@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from app.domain import (
     MENSAJE_RECHAZO,
     PENDIENTES_DE_AGENTE,
+    Cliente,
     ClienteNoActivo,
     ClienteNoEncontrado,
     CodigoCobertura,
@@ -45,6 +46,7 @@ from app.domain import (
     PolizaNoEncontrada,
     PolizaNoPendiente,
     PolizaYaExiste,
+    ReferenciaDocumento,
     SinCotizacion,
     SolicitudExistente,
     SolicitudPolizaInvalida,
@@ -62,6 +64,7 @@ from app.domain import (
 from app.logging_utils import sanear_para_log
 from app.ports import (
     ClienteRepository,
+    CorreosDePolizaPort,
     CotizacionPort,
     DocumentoPolizaPort,
     EventPublisher,
@@ -75,6 +78,63 @@ DOCUMENTO_DE_POLIZA = "poliza"
 _INTENTOS_NUMERO = 5
 
 
+def datos_para_documento(poliza: Poliza, cliente: Cliente | None) -> dict:
+    """Lo que necesita el documento de la póliza. Es el cuerpo del evento ``PolizaEmitida`` y lo
+    que se le manda a fn-documentos para pedir el enlace."""
+    assert poliza.vigencia is not None and poliza.emitida_en is not None
+    return {
+        "polizaId": poliza.id,
+        "clienteId": poliza.cliente_id,
+        "numero": poliza.numero,
+        "emitidaEn": poliza.emitida_en.isoformat(),
+        "vigencia": {
+            "desde": poliza.vigencia.desde.isoformat(),
+            "hasta": poliza.vigencia.hasta.isoformat(),
+        },
+        "coberturas": [
+            {
+                "codigo": str(c.codigo),
+                "obligatoria": c.obligatoria,
+                "sumaAsegurada": float(c.suma_asegurada),
+                "primaNeta": float(c.prima_neta),
+                "iva": float(c.iva),
+                "primaTotal": float(c.prima_total),
+            }
+            for c in poliza.coberturas
+        ],
+        "primaTotalMensual": float(poliza.prima_total_mensual),
+        "moneda": "COP",
+        "datosCredito": {
+            "valorCredito": float(poliza.datos_credito.valor_credito),
+            "plazoRestanteMeses": poliza.datos_credito.plazo_restante_meses,
+            "entidadAcreedora": poliza.datos_credito.entidad_acreedora,
+            "saldoInsoluto": float(poliza.datos_credito.saldo_insoluto),
+        },
+        "origenDatos": str(poliza.origen_datos),
+        "asegurado": None
+        if cliente is None
+        else {
+            "nombre": " ".join(
+                p
+                for p in (
+                    cliente.primer_nombre,
+                    cliente.segundo_nombre,
+                    cliente.primer_apellido,
+                    cliente.segundo_apellido,
+                )
+                if p
+            ),
+            "tipoDocumento": str(cliente.tipo_documento),
+            "numeroDocumento": cliente.numero_documento,
+            "email": cliente.email,
+        },
+        "documentosAceptados": [
+            {"tipo": d.tipo, "version": d.version, "aceptadoEn": d.aceptado_en.isoformat()}
+            for d in poliza.documentos_aceptados
+        ],
+    }
+
+
 class PolizaService:
     def __init__(
         self,
@@ -85,9 +145,11 @@ class PolizaService:
         documentos: DocumentoPolizaPort,
         events: EventPublisher,
         *,
+        correos: CorreosDePolizaPort | None = None,
         ahora: Callable[[], datetime] = now_utc,
         aleatorio: Callable[[str], str] = secrets.choice,
     ) -> None:
+        self._correos = correos
         self._clientes = clientes
         self._evidencias = evidencias
         self._polizas = polizas
@@ -198,7 +260,8 @@ class PolizaService:
         poliza = await self.obtener(cliente_id, poliza_id)
         if poliza.estado is not EstadoPoliza.EMITIDA:
             raise PolizaNoEmitida()
-        return await self._documentos.consultar(poliza)
+        cliente = await self._clientes.obtener(cliente_id)
+        return await self._documentos.consultar(datos_para_documento(poliza, cliente))
 
     # --- evaluación y emisión ---
 
@@ -295,63 +358,49 @@ class PolizaService:
     async def _publicar_emitida(self, poliza: Poliza) -> None:
         """Lleva todo lo que el documento necesita, para que quien lo genera no llame a Core."""
         cliente = await self._clientes.obtener(poliza.cliente_id)
-        assert poliza.vigencia is not None and poliza.emitida_en is not None
-        datos = {
-            "polizaId": poliza.id,
-            "clienteId": poliza.cliente_id,
-            "numero": poliza.numero,
-            "emitidaEn": poliza.emitida_en.isoformat(),
-            "vigencia": {
-                "desde": poliza.vigencia.desde.isoformat(),
-                "hasta": poliza.vigencia.hasta.isoformat(),
-            },
-            "coberturas": [
-                {
-                    "codigo": str(c.codigo),
-                    "obligatoria": c.obligatoria,
-                    "sumaAsegurada": float(c.suma_asegurada),
-                    "primaNeta": float(c.prima_neta),
-                    "iva": float(c.iva),
-                    "primaTotal": float(c.prima_total),
-                }
-                for c in poliza.coberturas
-            ],
-            "primaTotalMensual": float(poliza.prima_total_mensual),
-            "moneda": "COP",
-            "datosCredito": {
-                "valorCredito": float(poliza.datos_credito.valor_credito),
-                "plazoRestanteMeses": poliza.datos_credito.plazo_restante_meses,
-                "entidadAcreedora": poliza.datos_credito.entidad_acreedora,
-                "saldoInsoluto": float(poliza.datos_credito.saldo_insoluto),
-            },
-            "origenDatos": str(poliza.origen_datos),
-            "asegurado": None
-            if cliente is None
-            else {
-                "nombre": " ".join(
-                    p
-                    for p in (
-                        cliente.primer_nombre,
-                        cliente.segundo_nombre,
-                        cliente.primer_apellido,
-                        cliente.segundo_apellido,
-                    )
-                    if p
-                ),
-                "tipoDocumento": str(cliente.tipo_documento),
-                "numeroDocumento": cliente.numero_documento,
-                "email": cliente.email,
-            },
-            "documentosAceptados": [
-                {"tipo": d.tipo, "version": d.version, "aceptadoEn": d.aceptado_en.isoformat()}
-                for d in poliza.documentos_aceptados
-            ],
-        }
         try:
-            await self._events.publish(DomainEvent("PolizaEmitida", datos))
+            await self._events.publish(
+                DomainEvent("PolizaEmitida", datos_para_documento(poliza, cliente))
+            )
         except Exception:
             # La póliza ya está emitida; el documento se genera bajo demanda si falta.
             logger.exception("no se pudo publicar PolizaEmitida poliza_id=%s", poliza.id)
+
+    async def notificar_documento(self, datos: dict) -> None:
+        """``DocumentoPolizaGenerado``: el PDF ya está en el bucket, se encarga el correo con el
+        archivo adjunto. Idempotente: el aviso puede llegar más de una vez y el correo sale una.
+
+        Un fallo se propaga (y el reclamo se deshace) para que Pub/Sub reentregue el aviso.
+        """
+        if self._correos is None:
+            logger.info("notificar_documento: correos desactivados")
+            return
+        poliza = await self._polizas.obtener(datos["polizaId"])
+        if poliza is None or poliza.estado is not EstadoPoliza.EMITIDA:
+            logger.warning("notificar_documento: la póliza no está emitida o no existe")
+            return
+        cliente = await self._clientes.obtener(poliza.cliente_id)
+        if cliente is None:
+            logger.warning("notificar_documento: el cliente de la póliza no existe")
+            return
+        if not await self._polizas.reclamar_envio_documento(poliza.id, self._ahora()):
+            logger.info("notificar_documento: el correo ya se encargó poliza_id=%s", poliza.id)
+            return
+        try:
+            await self._correos.enviar_poliza_emitida(
+                cliente,
+                poliza.numero or "",
+                ReferenciaDocumento(
+                    bucket=datos["bucket"],
+                    objeto=datos["objeto"],
+                    nombre_archivo=datos["nombreArchivo"],
+                    content_type=datos.get("contentType", "application/pdf"),
+                ),
+            )
+        except Exception:
+            await self._polizas.liberar_envio_documento(poliza.id)
+            raise
+        logger.info("notificar_documento: correo encargado poliza_id=%s", poliza.id)
 
     async def _de_solicitud_existente(
         self, existente: Poliza, elegidas: frozenset[CodigoCobertura]

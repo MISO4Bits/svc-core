@@ -183,6 +183,7 @@ class DomainEvent:
 class TipoCorreo(StrEnum):
     BIENVENIDA = "bienvenida"
     VERIFICACION_CORREO = "verificacion-correo"
+    POLIZA_EMITIDA = "poliza-emitida"
 
 
 @dataclass(frozen=True)
@@ -440,6 +441,8 @@ class Poliza:
     decisiones: tuple[Decision, ...] = ()
     motivos_rechazo: tuple[MotivoRechazoPoliza, ...] = ()
     rechazada_en: datetime | None = None
+    # Cuándo se encargó el correo con el PDF adjunto; evita mandarlo dos veces.
+    documento_enviado_en: datetime | None = None
 
     @property
     def prima_total_mensual(self) -> Decimal:
@@ -480,6 +483,16 @@ class FiltroPolizas:
 class PaginaPolizas:
     items: tuple[Poliza, ...]
     siguiente_cursor: str | None
+
+
+@dataclass(frozen=True)
+class ReferenciaDocumento:
+    """Dónde quedó el PDF de la póliza (lo avisa fn-documentos con DocumentoPolizaGenerado)."""
+
+    bucket: str
+    objeto: str
+    nombre_archivo: str
+    content_type: str
 
 
 @dataclass(frozen=True)

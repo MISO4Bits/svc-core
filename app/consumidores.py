@@ -6,6 +6,9 @@ es pura respecto del evento ya decodificado, así que se prueba sin credenciales
 Cotización publica ``CotizacionCreada`` al guardar una cotización y ``CotizacionEliminada`` al
 borrarla. En ambos casos las pólizas ``PENDIENTE`` del cliente de una cotización anterior no
 llegaron a feliz término y se borran (BITS-101).
+
+fn-documentos publica ``DocumentoPolizaGenerado`` cuando el PDF de una póliza está en el bucket:
+Core encarga entonces el correo con el archivo adjunto.
 """
 
 from __future__ import annotations
@@ -19,7 +22,9 @@ from app.polizas import PolizaService
 
 logger = logging.getLogger("svc_core.consumidores")
 
-TIPOS_QUE_CONSUME = frozenset({"CotizacionCreada", "CotizacionEliminada"})
+TIPOS_QUE_CONSUME = frozenset(
+    {"CotizacionCreada", "CotizacionEliminada", "DocumentoPolizaGenerado"}
+)
 
 
 async def despachar_evento(polizas: PolizaService, evento: DomainEvent) -> None:
@@ -36,6 +41,14 @@ async def despachar_evento(polizas: PolizaService, evento: DomainEvent) -> None:
             "despachar_evento: CotizacionEliminada cliente_id=%s", sanear_para_log(cliente_id)
         )
         await polizas.descartar_pendientes(cliente_id, None)
+        return
+
+    if evento.tipo == "DocumentoPolizaGenerado":
+        try:
+            await polizas.notificar_documento(evento.datos)
+        except KeyError as exc:
+            # Un aviso sin los campos que necesita no se arregla reintentando: se descarta.
+            logger.error("despachar_evento: DocumentoPolizaGenerado sin el campo %s", exc)
         return
 
     # El filtro de la suscripción deja pasar solo estos tipos: llegar aquí es señal de que el

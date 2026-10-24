@@ -335,3 +335,21 @@ async def test_lo_guardado_sobrevive_a_un_reinicio_con_el_mismo_archivo(tmp_path
     await reinicio.init()  # el esquema es idempotente
 
     assert await SqlitePolizaRepository(reinicio).obtener(guardada.id) == guardada
+
+
+async def test_el_envio_del_documento_se_reclama_una_sola_vez_y_se_puede_liberar(repos):
+    polizas, _ = repos
+    p = poliza()
+    await polizas.crear(p)
+
+    primero = await polizas.reclamar_envio_documento(p.id, AHORA)
+    segundo = await polizas.reclamar_envio_documento(p.id, AHORA)
+    guardado = (await polizas.obtener(p.id)).documento_enviado_en
+    await polizas.liberar_envio_documento(p.id)
+
+    assert (primero, segundo) == (True, False)
+    assert guardado == AHORA
+    assert (await polizas.obtener(p.id)).documento_enviado_en is None
+    assert await polizas.reclamar_envio_documento(p.id, AHORA)
+    assert not await polizas.reclamar_envio_documento("no-existe", AHORA)
+    await polizas.liberar_envio_documento("no-existe")  # silencioso

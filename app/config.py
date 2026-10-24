@@ -97,10 +97,14 @@ class Settings(BaseSettings):
     cotizacion_base_url: str = "http://svc-cotizacion.svc-cotizacion.svc.cluster.local"  # NOSONAR
     cotizacion_timeout_s: float = 1.0
     documento_backend: str = "fake"
+    # Servicio fn-documentos (Cloud Run): su URL sale de Terraform. Se llama con un token de
+    # identidad de la cuenta de servicio de Core (la función no es pública).
+    documento_base_url: str | None = None
+    documento_timeout_s: float = 4.0
     # Consumo de CotizacionCreada / CotizacionEliminada (borra la póliza pendiente de la
     # cotización anterior): "off" | "pubsub" (suscripción en el tópico compartido).
     consumidor_backend: str = "off"
-    pubsub_subscription: str = "core-cotizacion"
+    pubsub_subscription: str = "core-polizas"
 
     # Observabilidad (DI-008): OTLP/gRPC hacia Grafana Alloy dentro del
     # cluster. Deshabilitado por defecto — en local/tests no hay receptor

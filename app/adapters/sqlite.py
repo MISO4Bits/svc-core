@@ -608,6 +608,7 @@ def _poliza_a_fila(p: Poliza) -> tuple:
         _iso(p.rechazada_en and p.rechazada_en.astimezone(UTC)),
         _utc(p.creada_en),
         _iso(p.ultima_evaluacion_en and p.ultima_evaluacion_en.astimezone(UTC)),
+        _iso(p.documento_enviado_en and p.documento_enviado_en.astimezone(UTC)),
     )
 
 
@@ -615,7 +616,8 @@ _COLUMNAS_POLIZA = (
     "id, cliente_id, cotizacion_creada_en, solicitud_vigente_hasta, estado, coberturas, "
     "datos_credito, origen_datos, tasa, version_tarifa, cobertura_meses, edad, "
     "documentos_aceptados, pendientes, decisiones, motivos_rechazo, evidencias, numero, "
-    "emitida_en, vigencia_desde, vigencia_hasta, rechazada_en, creada_en, ultima_evaluacion_en"
+    "emitida_en, vigencia_desde, vigencia_hasta, rechazada_en, creada_en, ultima_evaluacion_en, "
+    "documento_enviado_en"
 )
 
 
@@ -664,6 +666,7 @@ def _fila_a_poliza(row: aiosqlite.Row) -> Poliza:
         rechazada_en=_dt(row["rechazada_en"]),
         creada_en=_dt(row["creada_en"]),
         ultima_evaluacion_en=_dt(row["ultima_evaluacion_en"]),
+        documento_enviado_en=_dt(row["documento_enviado_en"]),
     )
 
 
@@ -687,7 +690,7 @@ class SqlitePolizaRepository:
         async with self._db.connect() as conn:
             try:
                 await conn.execute(
-                    f"INSERT INTO polizas ({_COLUMNAS_POLIZA}) VALUES ({', '.join('?' * 24)})",
+                    f"INSERT INTO polizas ({_COLUMNAS_POLIZA}) VALUES ({', '.join('?' * 25)})",
                     _poliza_a_fila(poliza),
                 )
                 await conn.commit()
@@ -899,6 +902,23 @@ class SqlitePolizaRepository:
             await conn.commit()
             return await self._leer(conn, poliza_id)
 
+    async def reclamar_envio_documento(self, poliza_id: str, cuando: datetime) -> bool:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "UPDATE polizas SET documento_enviado_en = ? "
+                "WHERE id = ? AND documento_enviado_en IS NULL",
+                (_utc(cuando), poliza_id),
+            )
+            await conn.commit()
+            return cursor.rowcount == 1
+
+    async def liberar_envio_documento(self, poliza_id: str) -> None:
+        async with self._db.connect() as conn:
+            await conn.execute(
+                "UPDATE polizas SET documento_enviado_en = NULL WHERE id = ?", (poliza_id,)
+            )
+            await conn.commit()
+
     async def borrar_pendientes_de_cliente(
         self, cliente_id: str, salvo_cotizacion: datetime | None
     ) -> int:
@@ -944,6 +964,7 @@ CREATE TABLE IF NOT EXISTS polizas (
     rechazada_en TEXT,
     creada_en TEXT NOT NULL,
     ultima_evaluacion_en TEXT,
+    documento_enviado_en TEXT,
     UNIQUE (cliente_id, cotizacion_creada_en)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_polizas_numero ON polizas (numero) WHERE numero IS NOT NULL;

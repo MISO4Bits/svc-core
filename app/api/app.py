@@ -45,7 +45,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     cerrables = [*cerrables, *cerrables_polizas]
     polizas = PolizaService(
-        clientes, repo_evidencias, repo_polizas, cotizaciones, documentos, events
+        clientes,
+        repo_evidencias,
+        repo_polizas,
+        cotizaciones,
+        documentos,
+        events,
+        correos=notificaciones,
     )
     # Si el cliente cumple algo que le faltaba a su póliza pendiente, esta se vuelve a evaluar.
     service = IdentityService(

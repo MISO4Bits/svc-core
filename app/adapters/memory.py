@@ -272,6 +272,18 @@ class InMemoryPolizaRepository:
         poliza.rechazada_en = rechazada_en
         return poliza
 
+    async def reclamar_envio_documento(self, poliza_id: str, cuando: datetime) -> bool:
+        poliza = self._items.get(poliza_id)
+        if poliza is None or poliza.documento_enviado_en is not None:
+            return False
+        poliza.documento_enviado_en = cuando
+        return True
+
+    async def liberar_envio_documento(self, poliza_id: str) -> None:
+        poliza = self._items.get(poliza_id)
+        if poliza is not None:
+            poliza.documento_enviado_en = None
+
     async def borrar_pendientes_de_cliente(
         self, cliente_id: str, salvo_cotizacion: datetime | None
     ) -> int:

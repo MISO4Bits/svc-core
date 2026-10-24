@@ -147,6 +147,14 @@ def build_polizas(
         from app.adapters.polizas_fake import DocumentoPolizaFake
 
         documentos: DocumentoPolizaPort = DocumentoPolizaFake()
+    elif settings.documento_backend == "http":
+        from app.adapters.documento_http import DocumentoPolizaHttp
+
+        if not settings.documento_base_url:
+            raise ValueError("CORE_DOCUMENTO_BASE_URL es obligatorio con documento_backend=http")
+        servicio = DocumentoPolizaHttp(settings.documento_base_url, settings.documento_timeout_s)
+        documentos = servicio
+        cerrables.append(servicio)
     else:
         raise ValueError(f"documento_backend no soportado: {settings.documento_backend}")
     return repositorio, cotizaciones, documentos, cerrables
