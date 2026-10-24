@@ -37,6 +37,10 @@ tags:
     description: Otorgamiento, consulta y revocación de consentimientos por scope.
   - name: Evidencias de identidad
     description: Cédula por ambas caras y selfie previas a la firma (BITS-275).
+  - name: Pólizas
+    description: Solicitud, consulta y documento de las pólizas de un cliente (BITS-101).
+  - name: Pólizas (backoffice)
+    description: Cola de pólizas de todos los clientes y decisión del personal de Solventa.
 
 security:
   - serviceAuth: []
@@ -353,6 +357,294 @@ paths:
                 items: { $ref: '#/components/schemas/EstadoTipoEvidencia' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
+  /v1/clientes/{clienteId}/polizas:
+    parameters:
+    - $ref: '#/components/parameters/ClienteId'
+    post:
+      operationId: solicitarPoliza
+      tags:
+      - Pólizas
+      summary: Solicita la póliza de la cotización activa de un cliente
+      description: Misma semántica y mismas respuestas que `POST /v1/cuenta/polizas`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SolicitarPolizaRequest'
+      responses:
+        '200':
+          description: Ya existía.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Poliza'
+        '201':
+          description: Creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Poliza'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '403':
+          $ref: '#/components/responses/Prohibido'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          $ref: '#/components/responses/ConflictoPoliza'
+        '422':
+          $ref: '#/components/responses/FueraDeRango'
+        '503':
+          $ref: '#/components/responses/NoDisponible'
+      security:
+      - serviceAuth: []
+    get:
+      operationId: listarPolizasDeCliente
+      tags:
+      - Pólizas
+      summary: Lista las pólizas de un cliente
+      parameters:
+      - $ref: '#/components/parameters/EstadoPolizaFiltro'
+      responses:
+        '200':
+          description: Pólizas del cliente.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Poliza'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+      security:
+      - serviceAuth: []
+  /v1/clientes/{clienteId}/polizas/{polizaId}:
+    parameters:
+    - $ref: '#/components/parameters/ClienteId'
+    - $ref: '#/components/parameters/PolizaId'
+    get:
+      operationId: obtenerPolizaDeCliente
+      tags:
+      - Pólizas
+      summary: Consulta una póliza de un cliente (re-evalúa si está pendiente)
+      responses:
+        '200':
+          description: La póliza.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Poliza'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+      security:
+      - serviceAuth: []
+  /v1/clientes/{clienteId}/polizas/{polizaId}/documento:
+    parameters:
+    - $ref: '#/components/parameters/ClienteId'
+    - $ref: '#/components/parameters/PolizaId'
+    get:
+      operationId: obtenerDocumentoPolizaDeCliente
+      tags:
+      - Pólizas
+      summary: Documento de una póliza emitida
+      description: Misma semántica y respuestas que `GET /v1/cuenta/polizas/{polizaId}/documento`.
+      responses:
+        '200':
+          description: Listo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentoPoliza'
+        '202':
+          description: Generándose.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentoPoliza'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          description: No está emitida.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemaPoliza'
+        '503':
+          $ref: '#/components/responses/NoDisponible'
+      security:
+      - serviceAuth: []
+  /v1/polizas:
+    get:
+      operationId: listarPolizas
+      tags:
+      - Pólizas (backoffice)
+      summary: Lista pólizas de todos los clientes, filtradas por estado
+      description: 'Cola de trabajo del agente. Orden por `creadaEn`; por defecto de la **más antigua**
+        a la
+
+        más reciente, para atender primero lo que lleva más esperando.
+
+
+        `estado = VENCIDA` es derivado: pólizas `PENDIENTE` con `solicitudVigenteHasta` ya pasada.
+
+        Para ver solo lo que espera a una persona: `estado=PENDIENTE&tipoPendiente=AGENTE`.
+
+        '
+      parameters:
+      - name: estado
+        in: query
+        schema:
+          $ref: '#/components/schemas/EstadoPoliza'
+      - name: tipoPendiente
+        in: query
+        description: Solo pólizas con al menos un pendiente de este tipo.
+        schema:
+          $ref: '#/components/schemas/TipoPendiente'
+      - name: codigoPendiente
+        in: query
+        schema:
+          $ref: '#/components/schemas/CodigoPendiente'
+      - name: clienteId
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: creadaDesde
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: creadaHasta
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: orden
+        in: query
+        schema:
+          type: string
+          enum:
+          - creadaEn
+          - -creadaEn
+          default: creadaEn
+      - name: limite
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+      - name: cursor
+        in: query
+        description: Valor `siguienteCursor` de la página anterior.
+        schema:
+          type: string
+          maxLength: 256
+      responses:
+        '200':
+          description: Una página de pólizas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaPolizas'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+      security:
+      - serviceAuth: []
+  /v1/polizas/{polizaId}:
+    parameters:
+    - $ref: '#/components/parameters/PolizaId'
+    get:
+      operationId: obtenerPolizaInterna
+      tags:
+      - Pólizas (backoffice)
+      summary: Detalle de una póliza para quien la revisa
+      description: 'Incluye lo que el cliente no ve: evidencias referenciadas, aprobaciones ya registradas
+        y los
+
+        datos de la cotización usada. No re-evalúa: muestra el último estado calculado.
+
+        '
+      responses:
+        '200':
+          description: Detalle interno.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolizaInterna'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+      security:
+      - serviceAuth: []
+  /v1/polizas/{polizaId}/decisiones:
+    parameters:
+    - $ref: '#/components/parameters/PolizaId'
+    post:
+      operationId: decidirPoliza
+      tags:
+      - Pólizas (backoffice)
+      summary: Aprueba pendientes o rechaza una póliza
+      description: "El personal de Solventa toma una decisión sobre una póliza `PENDIENTE`:\n\n- **`APROBAR`**:\
+        \ registra que verificó los `pendientes` indicados (solo de tipo `AGENTE`:\n  `EVIDENCIA_EN_REVISION`\
+        \ y/o `CREDITO_NO_VERIFICADO`) y **re-evalúa**. Si ya no queda\n  ningún pendiente (tampoco de usuario),\
+        \ la póliza pasa a `EMITIDA` en la misma operación;\n  si no, sigue `PENDIENTE` con lo que falta.\
+        \ Repetir una aprobación ya registrada no cambia\n  nada.\n- **`RECHAZAR`**: la póliza pasa a `RECHAZADA`\
+        \ (terminal). `pendientes` indica el\n  escenario que motiva el rechazo, y de él sale el mensaje\
+        \ que ve el cliente (no hay texto\n  libre). Se puede rechazar aunque queden pendientes de usuario.\
+        \ Las evidencias no se\n  consumen.\n\nMensajes al cliente por escenario:\n\n- `CREDITO_NO_VERIFICADO`:\
+        \ «No pudimos verificar los datos de tu crédito con la entidad\n  acreedora.»\n- `EVIDENCIA_EN_REVISION`:\
+        \ «No pudimos validar tu identidad con los documentos que\n  enviaste.»\n\nCada decisión queda registrada\
+        \ con quién, cuándo y la nota interna.\n"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+            examples:
+              aprobar:
+                value:
+                  decision: APROBAR
+                  agente: maria.gomez@solventa.co
+                  pendientes:
+                  - CREDITO_NO_VERIFICADO
+                  nota: Saldo y plazo confirmados con el certificado del banco.
+              rechazar:
+                value:
+                  decision: RECHAZAR
+                  agente: maria.gomez@solventa.co
+                  pendientes:
+                  - CREDITO_NO_VERIFICADO
+                  nota: El banco no reconoce el número de crédito.
+      responses:
+        '200':
+          description: Decisión registrada; póliza re-evaluada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolizaInterna'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          description: La póliza no está `PENDIENTE` (`codigo = POLIZA_NO_PENDIENTE`) o ya venció (`SOLICITUD_VENCIDA`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemaPoliza'
+        '422':
+          description: 'Un pendiente indicado no aplica: la póliza no lo tiene (`codigo = PENDIENTE_NO_APLICA`).
+
+            '
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemaPoliza'
+      security:
+      - serviceAuth: []
+
 components:
 
   securitySchemes:
@@ -382,6 +674,20 @@ components:
       description: Clave de idempotencia para reintentos seguros del alta.
       schema: { type: string, maxLength: 64 }
 
+    PolizaId:
+      name: polizaId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    EstadoPolizaFiltro:
+      name: estado
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/EstadoPoliza'
+
   responses:
     SolicitudInvalida:
       description: Solicitud mal formada o con validación de esquema fallida.
@@ -403,6 +709,40 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problema' }
+
+    ConflictoPoliza:
+      description: '`SIN_COTIZACION` (el cliente no tiene cotización activa), `COTIZACION_VENCIDA`,
+
+        `COTIZACION_CAMBIO` (la activa no es la que el cliente vio: volver a mostrarla),
+
+        `SOLICITUD_EXISTENTE` (ya hay una solicitud de esa cotización con otras coberturas) o
+
+        `SOLICITUD_RECHAZADA` (esa solicitud fue rechazada por un agente).
+
+        '
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemaPoliza'
+    NoDisponible:
+      description: Cotización no disponible (`codigo = COTIZACION_NO_DISPONIBLE`). Reintentar; no se emite
+        nada.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemaPoliza'
+    Prohibido:
+      description: El cliente no está `ACTIVO` (`codigo = CLIENTE_NO_ACTIVO`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemaPoliza'
+    FueraDeRango:
+      description: Edad o plazo fuera de rango (`codigo = FUERA_DE_RANGO`). No se crea la solicitud.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemaPoliza'
 
   schemas:
 
@@ -624,3 +964,534 @@ components:
             properties:
               campo: { type: string }
               mensaje: { type: string }
+
+    ProblemaPoliza:
+      allOf:
+      - $ref: '#/components/schemas/Problema'
+      - type: object
+        properties:
+          codigo:
+            type: string
+            enum:
+            - CLIENTE_NO_ACTIVO
+            - SIN_COTIZACION
+            - COTIZACION_VENCIDA
+            - COTIZACION_CAMBIO
+            - COTIZACION_NO_DISPONIBLE
+            - FUERA_DE_RANGO
+            - SOLICITUD_EXISTENTE
+            - SOLICITUD_RECHAZADA
+            - POLIZA_NO_EMITIDA
+            - POLIZA_NO_PENDIENTE
+            - SOLICITUD_VENCIDA
+            - PENDIENTE_NO_APLICA
+            - DOCUMENTO_NO_DISPONIBLE
+    CodigoPendiente:
+      type: string
+      enum:
+      - CORREO_SIN_CONFIRMAR
+      - EVIDENCIA_FALTANTE
+      - EVIDENCIA_EN_REVISION
+      - CREDITO_NO_VERIFICADO
+    Poliza:
+      type: object
+      required:
+      - polizaId
+      - estado
+      - producto
+      - creadaEn
+      - coberturas
+      - primaTotalMensual
+      - moneda
+      - datosCredito
+      - origenDatos
+      - cotizacionCreadaEn
+      - pendientes
+      - documento
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        numero:
+          type:
+          - string
+          - 'null'
+          example: SOL-VH-2026-K7M2Q9
+          description: Solo cuando está `EMITIDA`.
+        estado:
+          $ref: '#/components/schemas/EstadoPoliza'
+        producto:
+          type: string
+          enum:
+          - VIDA_HIPOTECARIO
+        creadaEn:
+          type: string
+          format: date-time
+        emitidaEn:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        solicitudVigenteHasta:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: 'Fin de la vigencia de la cotización atada. Una solicitud `PENDIENTE` pasa a `VENCIDA`
+
+            después de esta fecha. `null` si está `EMITIDA`.
+
+            '
+        vigencia:
+          oneOf:
+          - $ref: '#/components/schemas/Vigencia'
+          - type: 'null'
+          description: Vigencia de la cobertura; solo cuando está `EMITIDA`.
+        coberturas:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoberturaContratada'
+        primaTotalMensual:
+          type: number
+        moneda:
+          type: string
+          enum:
+          - COP
+        datosCredito:
+          $ref: '#/components/schemas/DatosCredito'
+        origenDatos:
+          $ref: '#/components/schemas/OrigenDatos'
+        cotizacionCreadaEn:
+          type: string
+          format: date-time
+        pendientes:
+          type: array
+          description: Vacía cuando está `EMITIDA`.
+          items:
+            $ref: '#/components/schemas/Pendiente'
+        documento:
+          $ref: '#/components/schemas/EstadoDocumento'
+        documentosAceptados:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentoAceptado'
+        rechazo:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - motivos
+          - rechazadaEn
+          description: Solo cuando está `RECHAZADA`.
+          properties:
+            motivos:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                required:
+                - codigo
+                - mensaje
+                properties:
+                  codigo:
+                    $ref: '#/components/schemas/CodigoPendienteDeAgente'
+                  mensaje:
+                    type: string
+                    description: Texto fijo del escenario
+                    listo para mostrar.: null
+            rechazadaEn:
+              type: string
+              format: date-time
+    SolicitarPolizaRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - coberturas
+      - cotizacionCreadaEn
+      - documentosAceptados
+      properties:
+        coberturas:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/CodigoCobertura'
+          description: Debe incluir `VIDA` (obligatoria). `HOGAR` es opcional.
+        cotizacionCreadaEn:
+          type: string
+          format: date-time
+          description: '`creadaEn` de la cotización que el cliente tiene en pantalla. Si no coincide con la
+
+            activa, responde 409 `COTIZACION_CAMBIO`: el cliente no paga un precio que no vio.
+
+            '
+        documentosAceptados:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/DocumentoAceptadoEntrada'
+          description: 'Documentos legales que la interfaz mostró y el cliente aceptó. Debe incluir el tipo
+
+            `poliza`. Se guardan con fecha de aceptación. No se valida que la versión exista en
+
+            Productos, igual que las versiones de política del registro.
+
+            '
+    CoberturaContratada:
+      type: object
+      additionalProperties: false
+      required:
+      - codigo
+      - obligatoria
+      - sumaAsegurada
+      - primaNeta
+      - iva
+      - primaTotal
+      properties:
+        codigo:
+          $ref: '#/components/schemas/CodigoCobertura'
+        obligatoria:
+          type: boolean
+        sumaAsegurada:
+          type: number
+        primaNeta:
+          type: number
+        iva:
+          type: number
+        primaTotal:
+          type: number
+    DatosCredito:
+      type: object
+      additionalProperties: false
+      required:
+      - valorCredito
+      - plazoRestanteMeses
+      - entidadAcreedora
+      - saldoInsoluto
+      properties:
+        valorCredito:
+          type: number
+        plazoRestanteMeses:
+          type: integer
+        entidadAcreedora:
+          type: string
+        saldoInsoluto:
+          type: number
+    EstadoPoliza:
+      type: string
+      enum:
+      - PENDIENTE
+      - EMITIDA
+      - RECHAZADA
+      - VENCIDA
+      description: '`VENCIDA` se deriva al leer; no se guarda.'
+    CodigoPendienteDeAgente:
+      type: string
+      enum:
+      - EVIDENCIA_EN_REVISION
+      - CREDITO_NO_VERIFICADO
+    TipoPendiente:
+      type: string
+      enum:
+      - USUARIO
+      - AGENTE
+    PaginaPolizas:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - siguienteCursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolizaResumen'
+        siguienteCursor:
+          type:
+          - string
+          - 'null'
+          description: '`null` en la última página.'
+    Vigencia:
+      type: object
+      additionalProperties: false
+      required:
+      - desde
+      - hasta
+      properties:
+        desde:
+          type: string
+          format: date-time
+        hasta:
+          type: string
+          format: date-time
+    PolizaResumen:
+      type: object
+      additionalProperties: false
+      required:
+      - polizaId
+      - clienteId
+      - estado
+      - creadaEn
+      - primaTotalMensual
+      - origenDatos
+      - pendientes
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        numero:
+          type:
+          - string
+          - 'null'
+        clienteId:
+          type: string
+          format: uuid
+        estado:
+          $ref: '#/components/schemas/EstadoPoliza'
+        creadaEn:
+          type: string
+          format: date-time
+        solicitudVigenteHasta:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        primaTotalMensual:
+          type: number
+        origenDatos:
+          $ref: '#/components/schemas/OrigenDatos'
+        pendientes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - codigo
+            - tipo
+            properties:
+              codigo:
+                $ref: '#/components/schemas/CodigoPendiente'
+              tipo:
+                $ref: '#/components/schemas/TipoPendiente'
+    DecisionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - decision
+      - agente
+      - pendientes
+      properties:
+        decision:
+          type: string
+          enum:
+          - APROBAR
+          - RECHAZAR
+        agente:
+          type: string
+          maxLength: 128
+          description: Correo o identificador de la persona de Solventa que decide.
+        pendientes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/CodigoPendienteDeAgente'
+          description: 'Con `APROBAR`, los pendientes que el agente verificó. Con `RECHAZAR`, el escenario
+            que
+
+            motiva el rechazo, del que sale el mensaje al cliente.
+
+            '
+        nota:
+          type: string
+          maxLength: 500
+          description: Interna; el cliente no la ve.
+    PolizaInterna:
+      unevaluatedProperties: false
+      description: La póliza que ve el cliente más lo que solo ve quien la revisa.
+      allOf:
+      - $ref: '#/components/schemas/Poliza'
+      - type: object
+        required:
+        - clienteId
+        - evidencias
+        - decisiones
+        properties:
+          clienteId:
+            type: string
+            format: uuid
+          ultimaEvaluacionEn:
+            type:
+            - string
+            - 'null'
+            format: date-time
+          tasa:
+            type: number
+          versionTarifa:
+            type: integer
+          evidencias:
+            type: array
+            description: Estado vigente de cada tipo de evidencia del cliente.
+            items:
+              type: object
+              additionalProperties: false
+              required:
+              - tipo
+              - estado
+              properties:
+                tipo:
+                  $ref: '#/components/schemas/TipoEvidencia'
+                estado:
+                  type: string
+                  enum:
+                  - ACEPTADA
+                  - REVISION_MANUAL
+                  - PENDIENTE
+                evidenciaId:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+          decisiones:
+            type: array
+            description: Historial de decisiones del personal de Solventa, de la más antigua a la más reciente.
+            items:
+              type: object
+              additionalProperties: false
+              required:
+              - decision
+              - agente
+              - decididaEn
+              properties:
+                decision:
+                  type: string
+                  enum:
+                  - APROBAR
+                  - RECHAZAR
+                agente:
+                  type: string
+                pendientes:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/CodigoPendienteDeAgente'
+                nota:
+                  type:
+                  - string
+                  - 'null'
+                decididaEn:
+                  type: string
+                  format: date-time
+    DocumentoPoliza:
+      type: object
+      additionalProperties: false
+      required:
+      - estado
+      properties:
+        estado:
+          type: string
+          enum:
+          - GENERANDO
+          - LISTO
+        url:
+          type:
+          - string
+          - 'null'
+          format: uri
+          description: Enlace temporal; solo con `LISTO`.
+        expiraEn:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    DocumentoAceptado:
+      type: object
+      additionalProperties: false
+      required:
+      - tipo
+      - version
+      - aceptadoEn
+      properties:
+        tipo:
+          type: string
+          enum:
+          - poliza
+        version:
+          type: string
+        aceptadoEn:
+          type: string
+          format: date-time
+    Pendiente:
+      type: object
+      additionalProperties: false
+      required:
+      - codigo
+      - tipo
+      - mensaje
+      properties:
+        codigo:
+          $ref: '#/components/schemas/CodigoPendiente'
+        tipo:
+          $ref: '#/components/schemas/TipoPendiente'
+        mensaje:
+          type: string
+          description: Texto listo para mostrar al cliente.
+        detalle:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          properties:
+            evidencias:
+              type: array
+              items:
+                $ref: '#/components/schemas/TipoEvidencia'
+              description: En `EVIDENCIA_FALTANTE` y `EVIDENCIA_EN_REVISION`, cuáles.
+    EstadoDocumento:
+      type: object
+      additionalProperties: false
+      required:
+      - estado
+      properties:
+        estado:
+          type: string
+          enum:
+          - NO_DISPONIBLE
+          - DISPONIBLE
+          description: '`DISPONIBLE`: la póliza está emitida y ya se puede pedir el documento (si todavía
+            se
+
+            está generando, `GET .../documento` responde 202). `NO_DISPONIBLE`: aún no está emitida.
+
+            '
+    OrigenDatos:
+      type: string
+      enum:
+      - CONFIRMADO
+      - DECLARADO
+      description: '`CONFIRMADO` si el crédito coincide exactamente con una hipoteca reportada por Open Finance;
+
+        `DECLARADO` en cualquier otro caso.
+
+        '
+    CodigoCobertura:
+      type: string
+      enum:
+      - VIDA
+      - HOGAR
+    DocumentoAceptadoEntrada:
+      type: object
+      additionalProperties: false
+      required:
+      - tipo
+      - version
+      properties:
+        tipo:
+          type: string
+          enum:
+          - poliza
+        version:
+          type: string
+          pattern: ^V[0-9]+$
+          description: Versión del documento legal mostrada (inmutable en Productos), por ejemplo `V1`.

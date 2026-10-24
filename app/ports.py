@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from app.domain import (
     Cliente,
     Consentimiento,
     ConsentimientoScope,
+    CotizacionActiva,
+    Decision,
+    DocumentoPoliza,
     DomainEvent,
     Evidencia,
+    FiltroPolizas,
+    MotivoRechazoPoliza,
+    PaginaPolizas,
+    Pendiente,
     PlantillaCorreo,
+    Poliza,
     TipoCorreo,
     TipoEvidencia,
     Veredicto,
+    Vigencia,
 )
 
 
@@ -129,4 +139,82 @@ class VerificadorBiometrico(Protocol):
         el rostro de la cédula. Si no hay rostro en la cédula devuelve ``REVISION_MANUAL``
         (el problema es del documento, no del usuario). Los puntajes del veredicto no salen
         del servicio."""
+        ...
+
+
+@runtime_checkable
+class PolizaRepository(Protocol):
+    async def crear(self, poliza: Poliza) -> None:
+        """Guarda la solicitud. Lanza ``PolizaYaExiste`` si el cliente ya tiene una de esa
+        cotización (carrera entre dos solicitudes)."""
+        ...
+
+    async def obtener(self, poliza_id: str) -> Poliza | None: ...
+
+    async def obtener_de_cotizacion(
+        self, cliente_id: str, cotizacion_creada_en: datetime
+    ) -> Poliza | None: ...
+
+    async def listar_de_cliente(self, cliente_id: str) -> list[Poliza]:
+        """Todas las del cliente, de la más reciente a la más antigua."""
+        ...
+
+    async def pendientes_de_cliente(self, cliente_id: str) -> list[Poliza]:
+        """Las que están en ``PENDIENTE`` (guardado), aunque su cotización ya haya vencido."""
+        ...
+
+    async def listar(self, filtro: FiltroPolizas, ahora: datetime) -> PaginaPolizas:
+        """Cola del backoffice: pólizas de todos los clientes. ``VENCIDA`` se calcula con
+        ``ahora`` porque no se guarda."""
+        ...
+
+    async def actualizar_pendientes(
+        self, poliza_id: str, pendientes: tuple[Pendiente, ...], evaluada_en: datetime
+    ) -> None:
+        """Guarda la última evaluación. No toca una póliza que ya no esté ``PENDIENTE``."""
+        ...
+
+    async def emitir(
+        self, poliza_id: str, numero: str, emitida_en: datetime, vigencia: Vigencia
+    ) -> Poliza | None:
+        """En una sola operación: pasa a ``EMITIDA`` (solo si sigue ``PENDIENTE``), asigna el
+        número y consume las evidencias vigentes del cliente. Devuelve ``None`` si ya no estaba
+        ``PENDIENTE``; lanza ``NumeroPolizaDuplicado`` si el número ya existe."""
+        ...
+
+    async def aprobar(self, poliza_id: str, decision: Decision) -> bool:
+        """Agrega la decisión del agente. ``False`` si la póliza ya no está ``PENDIENTE``."""
+        ...
+
+    async def rechazar(
+        self,
+        poliza_id: str,
+        decision: Decision,
+        motivos: tuple[MotivoRechazoPoliza, ...],
+        rechazada_en: datetime,
+    ) -> Poliza | None:
+        """Pasa a ``RECHAZADA`` (solo si sigue ``PENDIENTE``). ``None`` si ya no lo estaba."""
+        ...
+
+    async def borrar_pendientes_de_cliente(
+        self, cliente_id: str, salvo_cotizacion: datetime | None
+    ) -> int:
+        """Borra las ``PENDIENTE`` del cliente cuya cotización no sea ``salvo_cotizacion``
+        (todas si es ``None``). No toca emitidas ni rechazadas. Devuelve cuántas borró."""
+        ...
+
+
+@runtime_checkable
+class CotizacionPort(Protocol):
+    async def activa(self, cliente_id: str) -> CotizacionActiva | None:
+        """La cotización activa del cliente, o ``None`` si no tiene. Lanza
+        ``CotizacionNoDisponible`` si Cotización no responde."""
+        ...
+
+
+@runtime_checkable
+class DocumentoPolizaPort(Protocol):
+    async def consultar(self, poliza: Poliza) -> DocumentoPoliza:
+        """Estado del documento de una póliza emitida: ``GENERANDO`` o ``LISTO`` con enlace
+        temporal. Lanza ``DocumentoNoDisponible`` si el servicio de documentos no responde."""
         ...

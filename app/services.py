@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import date
 
 from app.domain import (
@@ -32,10 +33,13 @@ class IdentityService:
         clientes: ClienteRepository,
         consentimientos: ConsentimientoRepository,
         events: EventPublisher,
+        al_confirmar: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._clientes = clientes
         self._consentimientos = consentimientos
         self._events = events
+        # Gancho: la póliza pendiente del cliente se vuelve a evaluar (BITS-101).
+        self._al_confirmar = al_confirmar
 
     async def registrar_cliente(
         self,
@@ -167,6 +171,8 @@ class IdentityService:
         confirmado = await self._clientes.confirmar(cliente_id)
         assert confirmado is not None  # ya validamos que existe arriba
         logger.info("confirmar_cliente: cliente_id=%s", sanear_para_log(cliente_id))
+        if self._al_confirmar is not None:
+            await self._al_confirmar(cliente_id)
         return confirmado
 
     async def listar_consentimientos(self, cliente_id: str) -> list[Consentimiento]:

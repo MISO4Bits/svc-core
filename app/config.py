@@ -90,6 +90,17 @@ class Settings(BaseSettings):
     biometria_deteccion_min: float = 0.70
     biometria_rostro_min: float = 0.15
 
+    # Pólizas (BITS-101). Cotización activa del cliente: "fake" (dobles locales) | "http"
+    # (svc-cotizacion, ruta interna). Documento de la póliza: "fake" | "http".
+    cotizacion_backend: str = "fake"
+    cotizacion_base_url: str = "http://svc-cotizacion.svc-cotizacion.svc.cluster.local"
+    cotizacion_timeout_s: float = 1.0
+    documento_backend: str = "fake"
+    # Consumo de CotizacionCreada / CotizacionEliminada (borra la póliza pendiente de la
+    # cotización anterior): "off" | "pubsub" (suscripción en el tópico compartido).
+    consumidor_backend: str = "off"
+    pubsub_subscription: str = "core-cotizacion"
+
     # Observabilidad (DI-008): OTLP/gRPC hacia Grafana Alloy dentro del
     # cluster. Deshabilitado por defecto — en local/tests no hay receptor
     # escuchando; se habilita vía CORE_OTEL_ENABLED=true en el manifiesto de
