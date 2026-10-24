@@ -92,6 +92,6 @@ class DocumentoPolizaFake:
     async def consultar(self, poliza: Poliza) -> DocumentoPoliza:
         return DocumentoPoliza(
             EstadoDocumentoPoliza.LISTO,
-            url=f"http://documentos.local/{poliza.numero}.pdf",
+            url=f"https://documentos.local/{poliza.numero}.pdf",
             expira_en=now_utc() + timedelta(minutes=15),
         )

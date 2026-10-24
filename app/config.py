@@ -93,7 +93,8 @@ class Settings(BaseSettings):
     # Pólizas (BITS-101). Cotización activa del cliente: "fake" (dobles locales) | "http"
     # (svc-cotizacion, ruta interna). Documento de la póliza: "fake" | "http".
     cotizacion_backend: str = "fake"
-    cotizacion_base_url: str = "http://svc-cotizacion.svc-cotizacion.svc.cluster.local"
+    # Tráfico interno del clúster: sin TLS entre pods (igual que productos_base_url).
+    cotizacion_base_url: str = "http://svc-cotizacion.svc-cotizacion.svc.cluster.local"  # NOSONAR
     cotizacion_timeout_s: float = 1.0
     documento_backend: str = "fake"
     # Consumo de CotizacionCreada / CotizacionEliminada (borra la póliza pendiente de la
