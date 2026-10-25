@@ -90,6 +90,22 @@ class Settings(BaseSettings):
     biometria_deteccion_min: float = 0.70
     biometria_rostro_min: float = 0.15
 
+    # Pólizas (BITS-101). Cotización activa del cliente: "fake" (dobles locales) | "http"
+    # (svc-cotizacion, ruta interna). Documento de la póliza: "fake" | "http".
+    cotizacion_backend: str = "fake"
+    # Tráfico interno del clúster: sin TLS entre pods (igual que productos_base_url).
+    cotizacion_base_url: str = "http://svc-cotizacion.svc-cotizacion.svc.cluster.local"  # NOSONAR
+    cotizacion_timeout_s: float = 1.0
+    documento_backend: str = "fake"
+    # Servicio fn-documentos (Cloud Run): su URL sale de Terraform. Se llama con un token de
+    # identidad de la cuenta de servicio de Core (la función no es pública).
+    documento_base_url: str | None = None
+    documento_timeout_s: float = 4.0
+    # Consumo de CotizacionCreada / CotizacionEliminada (borra la póliza pendiente de la
+    # cotización anterior): "off" | "pubsub" (suscripción en el tópico compartido).
+    consumidor_backend: str = "off"
+    pubsub_subscription: str = "core-polizas"
+
     # Observabilidad (DI-008): OTLP/gRPC hacia Grafana Alloy dentro del
     # cluster. Deshabilitado por defecto — en local/tests no hay receptor
     # escuchando; se habilita vía CORE_OTEL_ENABLED=true en el manifiesto de

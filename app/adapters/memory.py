@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+import base64
+from datetime import UTC, datetime
+
 from app.domain import (
     Cliente,
     Consentimiento,
     ConsentimientoScope,
+    Decision,
     DomainEvent,
+    EstadoPoliza,
     Evidencia,
+    EvidenciaDePoliza,
+    FiltroPolizas,
+    MotivoRechazoPoliza,
+    NumeroPolizaDuplicado,
+    PaginaPolizas,
+    Pendiente,
+    Poliza,
+    PolizaYaExiste,
     TipoEvidencia,
+    Vigencia,
     now_utc,
 )
 
@@ -132,3 +146,175 @@ class InMemoryEvidenciaRepository:
 
     async def reiniciar_rechazos(self, cliente_id: str, tipo: TipoEvidencia) -> None:
         self._rechazos.pop((cliente_id, str(tipo)), None)
+
+
+def _en_utc(valor: datetime) -> datetime:
+    return valor.astimezone(UTC)
+
+
+def _cursor(poliza: Poliza) -> str:
+    crudo = f"{_en_utc(poliza.creada_en).isoformat()}|{poliza.id}"
+    return base64.urlsafe_b64encode(crudo.encode()).decode()
+
+
+def _decodificar_cursor(cursor: str) -> tuple[str, str]:
+    creada_en, _, poliza_id = base64.urlsafe_b64decode(cursor.encode()).decode().partition("|")
+    return creada_en, poliza_id
+
+
+class InMemoryPolizaRepository:
+    def __init__(self, evidencias: InMemoryEvidenciaRepository | None = None) -> None:
+        self._items: dict[str, Poliza] = {}
+        self._evidencias = evidencias
+
+    async def crear(self, poliza: Poliza) -> None:
+        for existente in self._items.values():
+            if existente.cliente_id == poliza.cliente_id and _en_utc(
+                existente.cotizacion_creada_en
+            ) == _en_utc(poliza.cotizacion_creada_en):
+                raise PolizaYaExiste(poliza.cliente_id)
+        self._items[poliza.id] = poliza
+
+    async def obtener(self, poliza_id: str) -> Poliza | None:
+        return self._items.get(poliza_id)
+
+    async def obtener_de_cotizacion(
+        self, cliente_id: str, cotizacion_creada_en: datetime
+    ) -> Poliza | None:
+        return next(
+            (
+                p
+                for p in self._items.values()
+                if p.cliente_id == cliente_id
+                and _en_utc(p.cotizacion_creada_en) == _en_utc(cotizacion_creada_en)
+            ),
+            None,
+        )
+
+    async def listar_de_cliente(self, cliente_id: str) -> list[Poliza]:
+        propias = (p for p in self._items.values() if p.cliente_id == cliente_id)
+        return sorted(propias, key=lambda p: p.creada_en, reverse=True)
+
+    async def pendientes_de_cliente(self, cliente_id: str) -> list[Poliza]:
+        return [
+            p
+            for p in self._items.values()
+            if p.cliente_id == cliente_id and p.estado is EstadoPoliza.PENDIENTE
+        ]
+
+    async def listar(self, filtro: FiltroPolizas, ahora: datetime) -> PaginaPolizas:
+        candidatas = [p for p in self._items.values() if _cumple(p, filtro, ahora)]
+        candidatas.sort(
+            key=lambda p: (_en_utc(p.creada_en), p.id), reverse=filtro.mas_recientes_primero
+        )
+        if filtro.cursor:
+            creada_en, poliza_id = _decodificar_cursor(filtro.cursor)
+            ref = (datetime.fromisoformat(creada_en), poliza_id)
+            if filtro.mas_recientes_primero:
+                candidatas = [p for p in candidatas if (_en_utc(p.creada_en), p.id) < ref]
+            else:
+                candidatas = [p for p in candidatas if (_en_utc(p.creada_en), p.id) > ref]
+        pagina = candidatas[: filtro.limite]
+        hay_mas = len(candidatas) > filtro.limite
+        return PaginaPolizas(tuple(pagina), _cursor(pagina[-1]) if hay_mas else None)
+
+    async def actualizar_pendientes(
+        self, poliza_id: str, pendientes: tuple[Pendiente, ...], evaluada_en: datetime
+    ) -> None:
+        poliza = self._items.get(poliza_id)
+        if poliza is not None and poliza.estado is EstadoPoliza.PENDIENTE:
+            poliza.pendientes = pendientes
+            poliza.ultima_evaluacion_en = evaluada_en
+
+    async def emitir(
+        self, poliza_id: str, numero: str, emitida_en: datetime, vigencia: Vigencia
+    ) -> Poliza | None:
+        poliza = self._items.get(poliza_id)
+        if poliza is None or poliza.estado is not EstadoPoliza.PENDIENTE:
+            return None
+        if any(p.numero == numero for p in self._items.values()):
+            raise NumeroPolizaDuplicado(numero)
+        consumidas: list[EvidenciaDePoliza] = []
+        if self._evidencias is not None:
+            for tipo in TipoEvidencia:
+                vigente = await self._evidencias.vigente(poliza.cliente_id, tipo)
+                if vigente is not None:
+                    consumidas.append(EvidenciaDePoliza(tipo, vigente.estado, vigente.id))
+            await self._evidencias.consumir(poliza.cliente_id, poliza.id)
+        poliza.estado = EstadoPoliza.EMITIDA
+        poliza.numero = numero
+        poliza.emitida_en = emitida_en
+        poliza.vigencia = vigencia
+        poliza.pendientes = ()
+        poliza.evidencias = tuple(consumidas)
+        return poliza
+
+    async def aprobar(self, poliza_id: str, decision: Decision) -> bool:
+        poliza = self._items.get(poliza_id)
+        if poliza is None or poliza.estado is not EstadoPoliza.PENDIENTE:
+            return False
+        poliza.decisiones = (*poliza.decisiones, decision)
+        return True
+
+    async def rechazar(
+        self,
+        poliza_id: str,
+        decision: Decision,
+        motivos: tuple[MotivoRechazoPoliza, ...],
+        rechazada_en: datetime,
+    ) -> Poliza | None:
+        poliza = self._items.get(poliza_id)
+        if poliza is None or poliza.estado is not EstadoPoliza.PENDIENTE:
+            return None
+        poliza.decisiones = (*poliza.decisiones, decision)
+        poliza.estado = EstadoPoliza.RECHAZADA
+        poliza.motivos_rechazo = motivos
+        poliza.rechazada_en = rechazada_en
+        return poliza
+
+    async def reclamar_envio_documento(self, poliza_id: str, cuando: datetime) -> bool:
+        poliza = self._items.get(poliza_id)
+        if poliza is None or poliza.documento_enviado_en is not None:
+            return False
+        poliza.documento_enviado_en = cuando
+        return True
+
+    async def liberar_envio_documento(self, poliza_id: str) -> None:
+        poliza = self._items.get(poliza_id)
+        if poliza is not None:
+            poliza.documento_enviado_en = None
+
+    async def borrar_pendientes_de_cliente(
+        self, cliente_id: str, salvo_cotizacion: datetime | None
+    ) -> int:
+        a_borrar = [
+            p.id
+            for p in self._items.values()
+            if p.cliente_id == cliente_id
+            and p.estado is EstadoPoliza.PENDIENTE
+            and (
+                salvo_cotizacion is None
+                or _en_utc(p.cotizacion_creada_en) != _en_utc(salvo_cotizacion)
+            )
+        ]
+        for poliza_id in a_borrar:
+            del self._items[poliza_id]
+        return len(a_borrar)
+
+
+def _cumple(poliza: Poliza, filtro: FiltroPolizas, ahora: datetime) -> bool:
+    if filtro.cliente_id and poliza.cliente_id != filtro.cliente_id:
+        return False
+    if filtro.estado and poliza.estado_en(ahora) is not filtro.estado:
+        return False
+    if filtro.tipo_pendiente and not any(
+        p.tipo is filtro.tipo_pendiente for p in poliza.pendientes
+    ):
+        return False
+    if filtro.codigo_pendiente and not any(
+        p.codigo is filtro.codigo_pendiente for p in poliza.pendientes
+    ):
+        return False
+    if filtro.creada_desde and _en_utc(poliza.creada_en) < _en_utc(filtro.creada_desde):
+        return False
+    return not (filtro.creada_hasta and _en_utc(poliza.creada_en) > _en_utc(filtro.creada_hasta))

@@ -60,7 +60,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.coverage.run]
 branch = true
 source = ["app"]
-omit = ["app/main.py", "app/adapters/pubsub.py"]
+omit = ["app/main.py", "app/adapters/pubsub.py", "app/adapters/pubsub_consumer.py"]
 
 [tool.coverage.report]
 fail_under = 80

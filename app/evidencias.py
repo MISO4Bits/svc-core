@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
 from app.domain import (
@@ -50,6 +51,7 @@ class EvidenciaService:
         timeout_s: float,
         biometria: VerificadorBiometrico | None = None,
         biometria_timeout_s: float = 5.0,
+        al_guardar: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._clientes = clientes
         self._evidencias = evidencias
@@ -62,6 +64,8 @@ class EvidenciaService:
         # Sin verificador biométrico la selfie solo pasa la revisión de calidad del de documentos.
         self._biometria = biometria
         self._biometria_timeout_s = biometria_timeout_s
+        # Gancho: la póliza pendiente del cliente se vuelve a evaluar (BITS-101).
+        self._al_guardar = al_guardar
 
     async def subir(self, cliente_id: str, tipo: TipoEvidencia, imagen: bytes) -> ResultadoSubida:
         cliente = await self._clientes.obtener(cliente_id)
@@ -120,6 +124,8 @@ class EvidenciaService:
             tipo,
             veredicto.estado,
         )
+        if self._al_guardar is not None:
+            await self._al_guardar(cliente_id)
         return ResultadoSubida(
             estado=veredicto.estado,
             motivo=None,

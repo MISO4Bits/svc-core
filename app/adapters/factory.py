@@ -10,6 +10,7 @@ from app.adapters.memory import (
     InMemoryEventPublisher,
     InMemoryEvidenciaRepository,
     InMemoryIdempotencyStore,
+    InMemoryPolizaRepository,
 )
 from app.adapters.sqlite import (
     SqliteClienteRepository,
@@ -17,6 +18,7 @@ from app.adapters.sqlite import (
     SqliteDatabase,
     SqliteEvidenciaRepository,
     SqliteIdempotencyStore,
+    SqlitePolizaRepository,
 )
 from app.adapters.verificador_mock import VerificadorBiometricoMock, VerificadorMock
 from app.calidad_imagen import UmbralesCalidad
@@ -26,9 +28,12 @@ from app.ports import (
     AlmacenEvidencias,
     ClienteRepository,
     ConsentimientoRepository,
+    CotizacionPort,
+    DocumentoPolizaPort,
     EventPublisher,
     EvidenciaRepository,
     IdempotencyStore,
+    PolizaRepository,
     VerificadorBiometrico,
     VerificadorDocumento,
 )
@@ -109,6 +114,50 @@ def build_biometria(settings: Settings) -> VerificadorBiometrico:
             max_concurrentes=settings.biometria_max_concurrentes,
         )
     raise ValueError(f"biometria_backend no soportado: {settings.biometria_backend}")
+
+
+def build_polizas(
+    settings: Settings, repo_evidencias: EvidenciaRepository
+) -> tuple[PolizaRepository, CotizacionPort, DocumentoPolizaPort, list[object]]:
+    """Repositorio de pólizas, cliente de Cotización y del documento, y lo que hay que cerrar."""
+    if settings.repository_backend == "memory":
+        # Emitir consume las evidencias: el repositorio en memoria necesita el mismo de evidencias.
+        assert isinstance(repo_evidencias, InMemoryEvidenciaRepository)
+        repositorio: PolizaRepository = InMemoryPolizaRepository(repo_evidencias)
+    elif settings.repository_backend == "sqlite":
+        repositorio = SqlitePolizaRepository(SqliteDatabase(settings.database_path))
+    else:
+        raise ValueError(f"repository_backend no soportado: {settings.repository_backend}")
+
+    cerrables: list[object] = []
+    if settings.cotizacion_backend == "fake":
+        from app.adapters.polizas_fake import CotizacionFake
+
+        cotizaciones: CotizacionPort = CotizacionFake()
+    elif settings.cotizacion_backend == "http":
+        from app.adapters.cotizacion_http import CotizacionHttp
+
+        http = CotizacionHttp(settings.cotizacion_base_url, settings.cotizacion_timeout_s)
+        cotizaciones = http
+        cerrables.append(http)
+    else:
+        raise ValueError(f"cotizacion_backend no soportado: {settings.cotizacion_backend}")
+
+    if settings.documento_backend == "fake":
+        from app.adapters.polizas_fake import DocumentoPolizaFake
+
+        documentos: DocumentoPolizaPort = DocumentoPolizaFake()
+    elif settings.documento_backend == "http":
+        from app.adapters.documento_http import DocumentoPolizaHttp
+
+        if not settings.documento_base_url:
+            raise ValueError("CORE_DOCUMENTO_BASE_URL es obligatorio con documento_backend=http")
+        servicio = DocumentoPolizaHttp(settings.documento_base_url, settings.documento_timeout_s)
+        documentos = servicio
+        cerrables.append(servicio)
+    else:
+        raise ValueError(f"documento_backend no soportado: {settings.documento_backend}")
+    return repositorio, cotizaciones, documentos, cerrables
 
 
 def build_event_publisher(settings: Settings) -> EventPublisher:

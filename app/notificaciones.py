@@ -20,7 +20,14 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 
-from app.domain import Cliente, DomainEvent, NotificacionError, PlantillaCorreo, TipoCorreo
+from app.domain import (
+    Cliente,
+    DomainEvent,
+    NotificacionError,
+    PlantillaCorreo,
+    ReferenciaDocumento,
+    TipoCorreo,
+)
 from app.ports import EventPublisher, IdentidadAdminPort, PlantillasCorreoPort
 
 logger = logging.getLogger("svc_core.notificaciones")
@@ -105,8 +112,36 @@ class NotificacionService:
         enlace = con_parametro(self._url_verificacion, "oobCode", codigo)
         return {**self._variables_base(cliente), "enlaceVerificacion": enlace}
 
+    async def enviar_poliza_emitida(
+        self, cliente: Cliente, numero: str, documento: ReferenciaDocumento
+    ) -> None:
+        """Correo con el PDF de la póliza adjunto (BITS-101). A diferencia de los del registro,
+        no traga los errores: quien llama reintenta (Pub/Sub reentrega el aviso)."""
+        variables = {
+            **self._variables_base(cliente),
+            "numeroPoliza": numero,
+            "urlWeb": self._url_web,
+        }
+        await self._publicar(
+            cliente,
+            TipoCorreo.POLIZA_EMITIDA,
+            variables,
+            adjuntos=[
+                {
+                    "nombre": documento.nombre_archivo,
+                    "bucket": documento.bucket,
+                    "objeto": documento.objeto,
+                    "contentType": documento.content_type,
+                }
+            ],
+        )
+
     async def _publicar(
-        self, cliente: Cliente, tipo: TipoCorreo, variables: dict[str, str]
+        self,
+        cliente: Cliente,
+        tipo: TipoCorreo,
+        variables: dict[str, str],
+        adjuntos: list[dict[str, str]] | None = None,
     ) -> None:
         plantilla = await self._plantillas.obtener_vigente(tipo, self._mercado, self._idioma)
         mensaje = self._armar(plantilla, variables)
@@ -119,6 +154,7 @@ class NotificacionService:
                     "plantillaVersion": plantilla.version,
                     "clienteId": cliente.id,
                     **mensaje,
+                    **({"adjuntos": adjuntos} if adjuntos else {}),
                 },
             )
         )

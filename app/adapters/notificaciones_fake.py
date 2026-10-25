@@ -7,9 +7,10 @@ from app.domain import PlantillaCorreo, TipoCorreo
 
 class FakePlantillasCorreo:
     async def obtener_vigente(self, tipo: TipoCorreo, mercado: str, idioma: str) -> PlantillaCorreo:
-        enlace = (
-            "{{enlaceVerificacion}}" if tipo is TipoCorreo.VERIFICACION_CORREO else "{{urlWeb}}"
-        )
+        enlace = {
+            TipoCorreo.VERIFICACION_CORREO: "{{enlaceVerificacion}}",
+            TipoCorreo.POLIZA_EMITIDA: "{{numeroPoliza}}",
+        }.get(tipo, "{{urlWeb}}")
         return PlantillaCorreo(
             tipo=str(tipo),
             version="V1",
