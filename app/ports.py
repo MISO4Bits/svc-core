@@ -11,6 +11,7 @@ from app.domain import (
     ConsentimientoScope,
     CotizacionActiva,
     Decision,
+    Dispositivo,
     DocumentoPoliza,
     DomainEvent,
     Evidencia,
@@ -238,4 +239,26 @@ class CorreosDePolizaPort(Protocol):
     ) -> None:
         """Encarga el correo con el PDF adjunto. A diferencia de los del registro, un fallo se
         propaga: quien llama reintenta."""
+        ...
+
+
+@runtime_checkable
+class DispositivoRepository(Protocol):
+    async def registrar(self, dispositivo: Dispositivo, maximo: int) -> Dispositivo:
+        """Guarda el dispositivo. Si el token ya existía se actualiza (y pasa al cliente nuevo si
+        era de otro, conservando su id). Si el cliente queda con más de ``maximo``, se descartan
+        los de ``ultimo_visto_en`` más antiguo. Devuelve el dispositivo guardado."""
+        ...
+
+    async def quitar(self, cliente_id: str, dispositivo_id: str) -> bool:
+        """Borra el dispositivo si es de ese cliente. ``False`` si no había nada que borrar."""
+        ...
+
+    async def de_cliente(self, cliente_id: str) -> list[Dispositivo]: ...
+
+
+@runtime_checkable
+class AvisosDePolizaPort(Protocol):
+    async def avisar_poliza_emitida(self, poliza: Poliza) -> None:
+        """Encarga el aviso push de póliza emitida a los dispositivos del cliente."""
         ...

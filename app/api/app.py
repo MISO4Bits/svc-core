@@ -9,7 +9,9 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from app.adapters.factory import (
+    build_avisos,
     build_biometria,
+    build_dispositivos,
     build_event_publisher,
     build_evidencias,
     build_notificaciones,
@@ -17,11 +19,13 @@ from app.adapters.factory import (
     build_repositories,
     maybe_init,
 )
+from app.api.dispositivos import router as dispositivos_router
 from app.api.errors import install_error_handlers
 from app.api.evidencias import router as evidencias_router
 from app.api.polizas import router as polizas_router
 from app.api.routes import router
 from app.config import Settings, get_settings
+from app.dispositivos import DispositivoService
 from app.evidencias import EvidenciaService
 from app.logging_utils import SinRuidoDeHealthCheck
 from app.polizas import PolizaService
@@ -44,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings, repo_evidencias
     )
     cerrables = [*cerrables, *cerrables_polizas]
+    repo_dispositivos = build_dispositivos(settings)
     polizas = PolizaService(
         clientes,
         repo_evidencias,
@@ -52,7 +57,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         documentos,
         events,
         correos=notificaciones,
+        avisos=build_avisos(settings, repo_dispositivos, events),
     )
+    dispositivos = DispositivoService(clientes, repo_dispositivos)
     # Si el cliente cumple algo que le faltaba a su póliza pendiente, esta se vuelve a evaluar.
     service = IdentityService(
         clientes, consentimientos, events, al_confirmar=polizas.reevaluar_cliente
@@ -82,7 +89,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        for adapter in (clientes, consentimientos, idempotency, repo_evidencias, repo_polizas):
+        for adapter in (
+            clientes,
+            consentimientos,
+            idempotency,
+            repo_evidencias,
+            repo_polizas,
+            repo_dispositivos,
+        ):
             await maybe_init(adapter)
         precargar = getattr(biometria, "precargar", None)
         if precargar is not None:
@@ -113,11 +127,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.notificaciones = notificaciones
     app.state.evidencias = evidencias
     app.state.polizas = polizas
+    app.state.dispositivos = dispositivos
 
     install_error_handlers(app)
     app.include_router(router, prefix="/v1")
     app.include_router(evidencias_router, prefix="/v1")
     app.include_router(polizas_router, prefix="/v1")
+    app.include_router(dispositivos_router, prefix="/v1")
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:

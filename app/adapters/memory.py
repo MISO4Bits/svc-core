@@ -10,6 +10,7 @@ from app.domain import (
     Consentimiento,
     ConsentimientoScope,
     Decision,
+    Dispositivo,
     DomainEvent,
     EstadoPoliza,
     Evidencia,
@@ -318,3 +319,42 @@ def _cumple(poliza: Poliza, filtro: FiltroPolizas, ahora: datetime) -> bool:
     if filtro.creada_desde and _en_utc(poliza.creada_en) < _en_utc(filtro.creada_desde):
         return False
     return not (filtro.creada_hasta and _en_utc(poliza.creada_en) > _en_utc(filtro.creada_hasta))
+
+
+class InMemoryDispositivoRepository:
+    def __init__(self) -> None:
+        self._por_token: dict[str, Dispositivo] = {}
+
+    async def registrar(self, dispositivo: Dispositivo, maximo: int) -> Dispositivo:
+        guardado = self._por_token.get(dispositivo.token)
+        if guardado is None:
+            guardado = self._por_token[dispositivo.token] = dispositivo
+        else:
+            if guardado.cliente_id != dispositivo.cliente_id:
+                guardado.cliente_id = dispositivo.cliente_id
+                guardado.registrado_en = dispositivo.registrado_en
+            guardado.plataforma = dispositivo.plataforma
+            guardado.version_app = dispositivo.version_app
+            guardado.ultimo_visto_en = dispositivo.ultimo_visto_en
+        # El recién guardado siempre se queda, aunque otro tenga la misma marca de tiempo.
+        propios = sorted(
+            (d for d in self._por_token.values() if d.cliente_id == guardado.cliente_id),
+            key=lambda d: (d is guardado, d.ultimo_visto_en),
+        )
+        for sobrante in propios[: max(0, len(propios) - maximo)]:
+            del self._por_token[sobrante.token]
+        return guardado
+
+    async def quitar(self, cliente_id: str, dispositivo_id: str) -> bool:
+        for token, d in self._por_token.items():
+            if d.id == dispositivo_id and d.cliente_id == cliente_id:
+                del self._por_token[token]
+                return True
+        return False
+
+    async def de_cliente(self, cliente_id: str) -> list[Dispositivo]:
+        return sorted(
+            (d for d in self._por_token.values() if d.cliente_id == cliente_id),
+            key=lambda d: d.ultimo_visto_en,
+            reverse=True,
+        )

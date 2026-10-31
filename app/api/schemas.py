@@ -21,6 +21,7 @@ from app.domain import (
     EstadoPoliza,
     MotivoRechazo,
     OrigenDatos,
+    PlataformaDispositivo,
     TipoDecision,
     TipoDocumento,
     TipoEvidencia,
@@ -278,3 +279,16 @@ class DocumentoPolizaOut(_Model):
     estado: EstadoDocumentoPoliza
     url: str | None = None
     expira_en: datetime | None = None
+
+
+# --- Dispositivos para avisos push (BITS-229) ---
+
+
+class RegistrarDispositivoRequest(_Model):
+    token: str = Field(min_length=8, max_length=4096, pattern=r"^\S+$")
+    plataforma: PlataformaDispositivo
+    version_app: str = Field(min_length=1, max_length=32)
+
+
+class DispositivoOut(_Model):
+    dispositivo_id: str

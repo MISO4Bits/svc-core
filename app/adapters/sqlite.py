@@ -26,6 +26,7 @@ from app.domain import (
     ConsentimientoScope,
     DatosCredito,
     Decision,
+    Dispositivo,
     DocumentoAceptado,
     EstadoCliente,
     EstadoConsentimiento,
@@ -39,6 +40,7 @@ from app.domain import (
     OrigenDatos,
     PaginaPolizas,
     Pendiente,
+    PlataformaDispositivo,
     Poliza,
     PolizaYaExiste,
     TipoDecision,
@@ -109,6 +111,16 @@ CREATE TABLE IF NOT EXISTS idempotencia (
     valor TEXT NOT NULL,
     creado_en TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS dispositivos (
+    dispositivo_id TEXT PRIMARY KEY,
+    cliente_id TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    plataforma TEXT NOT NULL,
+    version_app TEXT NOT NULL,
+    registrado_en TEXT NOT NULL,
+    ultimo_visto_en TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dispositivos_cliente ON dispositivos (cliente_id);
 """
 
 
@@ -971,3 +983,100 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_polizas_numero ON polizas (numero) WHERE n
 CREATE INDEX IF NOT EXISTS idx_polizas_cliente ON polizas (cliente_id, estado);
 CREATE INDEX IF NOT EXISTS idx_polizas_cola ON polizas (estado, creada_en);
 """
+
+
+# --- Dispositivos (BITS-229) ---
+
+
+def _row_to_dispositivo(row: aiosqlite.Row) -> Dispositivo:
+    return Dispositivo(
+        id=row["dispositivo_id"],
+        cliente_id=row["cliente_id"],
+        token=row["token"],
+        plataforma=PlataformaDispositivo(row["plataforma"]),
+        version_app=row["version_app"],
+        registrado_en=datetime.fromisoformat(row["registrado_en"]),
+        ultimo_visto_en=datetime.fromisoformat(row["ultimo_visto_en"]),
+    )
+
+
+class SqliteDispositivoRepository:
+    def __init__(self, db: SqliteDatabase) -> None:
+        self._db = db
+
+    async def registrar(self, dispositivo: Dispositivo, maximo: int) -> Dispositivo:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM dispositivos WHERE token = ?", (dispositivo.token,)
+            )
+            existente = await cursor.fetchone()
+            if existente is None:
+                await conn.execute(
+                    "INSERT INTO dispositivos (dispositivo_id, cliente_id, token, plataforma, "
+                    "version_app, registrado_en, ultimo_visto_en) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        dispositivo.id,
+                        dispositivo.cliente_id,
+                        dispositivo.token,
+                        str(dispositivo.plataforma),
+                        dispositivo.version_app,
+                        _utc(dispositivo.registrado_en),
+                        _utc(dispositivo.ultimo_visto_en),
+                    ),
+                )
+                guardado = dispositivo
+            else:
+                cambia_de_cliente = existente["cliente_id"] != dispositivo.cliente_id
+                registrado_en = (
+                    _utc(dispositivo.registrado_en)
+                    if cambia_de_cliente
+                    else existente["registrado_en"]
+                )
+                await conn.execute(
+                    "UPDATE dispositivos SET cliente_id = ?, plataforma = ?, version_app = ?, "
+                    "registrado_en = ?, ultimo_visto_en = ? WHERE dispositivo_id = ?",
+                    (
+                        dispositivo.cliente_id,
+                        str(dispositivo.plataforma),
+                        dispositivo.version_app,
+                        registrado_en,
+                        _utc(dispositivo.ultimo_visto_en),
+                        existente["dispositivo_id"],
+                    ),
+                )
+                guardado = Dispositivo(
+                    id=existente["dispositivo_id"],
+                    cliente_id=dispositivo.cliente_id,
+                    token=dispositivo.token,
+                    plataforma=dispositivo.plataforma,
+                    version_app=dispositivo.version_app,
+                    registrado_en=datetime.fromisoformat(registrado_en),
+                    ultimo_visto_en=dispositivo.ultimo_visto_en,
+                )
+            # Se conservan los `maximo` más recientes; el recién guardado siempre se queda.
+            await conn.execute(
+                "DELETE FROM dispositivos WHERE cliente_id = ? AND dispositivo_id NOT IN ("
+                "SELECT dispositivo_id FROM dispositivos WHERE cliente_id = ? "
+                "ORDER BY dispositivo_id = ? DESC, ultimo_visto_en DESC LIMIT ?)",
+                (guardado.cliente_id, guardado.cliente_id, guardado.id, maximo),
+            )
+            await conn.commit()
+        return guardado
+
+    async def quitar(self, cliente_id: str, dispositivo_id: str) -> bool:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "DELETE FROM dispositivos WHERE cliente_id = ? AND dispositivo_id = ?",
+                (cliente_id, dispositivo_id),
+            )
+            await conn.commit()
+        return cursor.rowcount > 0
+
+    async def de_cliente(self, cliente_id: str) -> list[Dispositivo]:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM dispositivos WHERE cliente_id = ? ORDER BY ultimo_visto_en DESC",
+                (cliente_id,),
+            )
+            filas = await cursor.fetchall()
+        return [_row_to_dispositivo(f) for f in filas]

@@ -41,6 +41,8 @@ tags:
     description: Solicitud, consulta y documento de las pólizas de un cliente (BITS-101).
   - name: Pólizas (backoffice)
     description: Cola de pólizas de todos los clientes y decisión del personal de Solventa.
+  - name: Dispositivos
+    description: Dispositivos de los clientes para los avisos push (BITS-229).
 
 security:
   - serviceAuth: []
@@ -644,6 +646,51 @@ paths:
                 $ref: '#/components/schemas/ProblemaPoliza'
       security:
       - serviceAuth: []
+
+  /v1/clientes/{clienteId}/dispositivos:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+    put:
+      operationId: registrarDispositivo
+      tags: [Dispositivos]
+      summary: Registra o actualiza el dispositivo del cliente para avisos push
+      description: |
+        La app obtiene su token de Firebase y lo registra aquí a través del BFF móvil (BITS-229).
+
+        Idempotente: repetir el mismo token solo renueva su última vista. Si el token ya era de
+        otro cliente (teléfono compartido), pasa a este. Cada cliente conserva como máximo 5
+        dispositivos; al registrar uno más se descarta el que lleva más tiempo sin verse.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegistrarDispositivoRequest' }
+      responses:
+        '200':
+          description: Dispositivo registrado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispositivo' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /v1/clientes/{clienteId}/dispositivos/{dispositivoId}:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+      - name: dispositivoId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: quitarDispositivo
+      tags: [Dispositivos]
+      summary: Quita el dispositivo del cliente
+      description: |
+        Idempotente: si el dispositivo ya no existe, o es de otro cliente, responde igual `204`.
+        La app lo pide al cerrar sesión y no debe depender de lo ocurrido antes.
+      responses:
+        '204':
+          description: El dispositivo ya no está registrado para el cliente.
 
 components:
 
@@ -1495,3 +1542,29 @@ components:
           type: string
           pattern: ^V[0-9]+$
           description: Versión del documento legal mostrada (inmutable en Productos), por ejemplo `V1`.
+
+    RegistrarDispositivoRequest:
+      type: object
+      additionalProperties: false
+      required: [token, plataforma, versionApp]
+      properties:
+        token:
+          type: string
+          minLength: 8
+          maxLength: 4096
+          pattern: ^\S+$
+          description: Token de Firebase Cloud Messaging de esta instalación de la app.
+        plataforma:
+          type: string
+          enum: [android]
+        versionApp:
+          type: string
+          minLength: 1
+          maxLength: 32
+
+    Dispositivo:
+      type: object
+      additionalProperties: false
+      required: [dispositivoId]
+      properties:
+        dispositivoId: { type: string, format: uuid }

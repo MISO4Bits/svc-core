@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     correo_mercado: str = "CO"
     correo_idioma: str = "es-CO"
 
+    # Avisos push (BITS-229): al emitirse una póliza, Core publica "EnviarPush" para los
+    # dispositivos registrados del cliente y fn-notificaciones lo entrega por Firebase.
+    # "off" (no avisa) | "on" (publica con el publicador de eventos de arriba).
+    push_backend: str = "off"
+
     # Evidencias de identidad (BITS-275): cédula por ambas caras y selfie.
     # Verificador: "mock" (veredictos configurables) | "local" (análisis de imagen en proceso).
     verificador_backend: str = "mock"
