@@ -7,6 +7,7 @@ from app.adapters.events import LoggingEventPublisher
 from app.adapters.memory import (
     InMemoryClienteRepository,
     InMemoryConsentimientoRepository,
+    InMemoryDispositivoRepository,
     InMemoryEventPublisher,
     InMemoryEvidenciaRepository,
     InMemoryIdempotencyStore,
@@ -16,11 +17,13 @@ from app.adapters.sqlite import (
     SqliteClienteRepository,
     SqliteConsentimientoRepository,
     SqliteDatabase,
+    SqliteDispositivoRepository,
     SqliteEvidenciaRepository,
     SqliteIdempotencyStore,
     SqlitePolizaRepository,
 )
 from app.adapters.verificador_mock import VerificadorBiometricoMock, VerificadorMock
+from app.avisos import AvisoService
 from app.calidad_imagen import UmbralesCalidad
 from app.config import Settings
 from app.notificaciones import NotificacionService
@@ -29,6 +32,7 @@ from app.ports import (
     ClienteRepository,
     ConsentimientoRepository,
     CotizacionPort,
+    DispositivoRepository,
     DocumentoPolizaPort,
     EventPublisher,
     EvidenciaRepository,
@@ -158,6 +162,26 @@ def build_polizas(
     else:
         raise ValueError(f"documento_backend no soportado: {settings.documento_backend}")
     return repositorio, cotizaciones, documentos, cerrables
+
+
+def build_dispositivos(settings: Settings) -> DispositivoRepository:
+    """Dispositivos registrados para avisos push (BITS-229)."""
+    if settings.repository_backend == "memory":
+        return InMemoryDispositivoRepository()
+    if settings.repository_backend == "sqlite":
+        return SqliteDispositivoRepository(SqliteDatabase(settings.database_path))
+    raise ValueError(f"repository_backend no soportado: {settings.repository_backend}")
+
+
+def build_avisos(
+    settings: Settings, dispositivos: DispositivoRepository, events: EventPublisher
+) -> AvisoService | None:
+    """Servicio de avisos push. ``off`` (por defecto) no avisa: local y pruebas no lo necesitan."""
+    if settings.push_backend == "off":
+        return None
+    if settings.push_backend == "on":
+        return AvisoService(dispositivos, events)
+    raise ValueError(f"push_backend no soportado: {settings.push_backend}")
 
 
 def build_event_publisher(settings: Settings) -> EventPublisher:

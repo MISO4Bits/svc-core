@@ -28,6 +28,7 @@ uvicorn app.main:app --reload --port 8080
 | `CORE_DATABASE_PATH` | `./svc_core.db` | ruta del archivo SQLite |
 | `CORE_EVENT_BACKEND` | `logging` | `logging` \| `memory` \| `pubsub` |
 | `CORE_NOTIFICACIONES_BACKEND` | `off` | correos del registro: `off` \| `fake` (dobles locales) \| `real` (Productos + Identity Platform) |
+| `CORE_PUSH_BACKEND` | `off` | avisos push (BITS-229): `off` \| `on` (al emitirse una póliza publica `EnviarPush` para los dispositivos registrados del cliente, con el publicador de `CORE_EVENT_BACKEND`) |
 | `CORE_PRODUCTOS_BASE_URL` | `http://svc-productos.svc-productos.svc.cluster.local` | de dónde sale la plantilla del correo |
 | `CORE_IDENTITY_PROJECT_ID` | — | proyecto de Identity Platform (obligatoria con `real`) |
 | `CORE_WEB_URL_BASE` / `CORE_WEB_URL_VERIFICACION` | `https://solventa4bits.com` / `.../verificar-correo` | enlaces que van dentro del correo |
@@ -108,3 +109,15 @@ pytest tests/unit          tests/contract          tests/integration   # por tip
 ```
 
 La suite usa SQLite en archivos temporales; no necesita Docker ni servicios externos.
+
+## Dispositivos y avisos push (BITS-229)
+
+`PUT /v1/clientes/{clienteId}/dispositivos` registra el token de Firebase de un teléfono
+(idempotente; si el token era de otro cliente pasa al nuevo; máximo 5 por cliente, se descarta el
+menos visto) y `DELETE /v1/clientes/{clienteId}/dispositivos/{dispositivoId}` lo quita. Los llama
+`bff-mobile` con el `clienteId` de la sesión.
+
+Con `CORE_PUSH_BACKEND=on`, al emitirse una póliza se publica `EnviarPush` (junto a `PolizaEmitida`)
+con los tokens del cliente, los textos aprobados y la ruta `seguro/<polizaId>`. `fn-notificaciones`
+lo entrega por Firebase. Si el cliente no tiene dispositivos no se publica nada, y un fallo al
+publicar solo se registra: nunca afecta a la emisión. Los logs nunca llevan el token completo.

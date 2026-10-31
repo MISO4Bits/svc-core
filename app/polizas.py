@@ -63,6 +63,7 @@ from app.domain import (
 )
 from app.logging_utils import sanear_para_log
 from app.ports import (
+    AvisosDePolizaPort,
     ClienteRepository,
     CorreosDePolizaPort,
     CotizacionPort,
@@ -146,10 +147,12 @@ class PolizaService:
         events: EventPublisher,
         *,
         correos: CorreosDePolizaPort | None = None,
+        avisos: AvisosDePolizaPort | None = None,
         ahora: Callable[[], datetime] = now_utc,
         aleatorio: Callable[[str], str] = secrets.choice,
     ) -> None:
         self._correos = correos
+        self._avisos = avisos
         self._clientes = clientes
         self._evidencias = evidencias
         self._polizas = polizas
@@ -365,6 +368,17 @@ class PolizaService:
         except Exception:
             # La póliza ya está emitida; el documento se genera bajo demanda si falta.
             logger.exception("no se pudo publicar PolizaEmitida poliza_id=%s", poliza.id)
+        await self._avisar_emitida(poliza)
+
+    async def _avisar_emitida(self, poliza: Poliza) -> None:
+        """Aviso push de póliza emitida (BITS-229). Un fallo se registra y nada más: la póliza
+        ya está emitida y el cliente sigue teniendo el correo."""
+        if self._avisos is None:
+            return
+        try:
+            await self._avisos.avisar_poliza_emitida(poliza)
+        except Exception:
+            logger.exception("no se pudo encargar el aviso push poliza_id=%s", poliza.id)
 
     async def notificar_documento(self, datos: dict) -> None:
         """``DocumentoPolizaGenerado``: el PDF ya está en el bucket, se encarga el correo con el

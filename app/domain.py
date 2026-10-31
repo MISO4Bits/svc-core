@@ -654,3 +654,27 @@ def generar_numero_poliza(emitida_en: datetime, aleatorio: Callable[[str], str])
     aleatorios (no consecutivo, para no crear un cuello de botella al escribir)."""
     sufijo = "".join(aleatorio(ALFABETO_NUMERO_POLIZA) for _ in range(6))
     return f"SOL-VH-{emitida_en.year}-{sufijo}"
+
+
+# --- Dispositivos y avisos push (BITS-229) ---
+
+MAX_DISPOSITIVOS_POR_CLIENTE = 5
+
+
+class PlataformaDispositivo(StrEnum):
+    ANDROID = "android"
+
+
+@dataclass
+class Dispositivo:
+    """Teléfono de un cliente al que se le pueden mandar avisos push. El ``token`` identifica la
+    instalación de la app en Firebase y es único: si otro cliente inicia sesión en el mismo
+    teléfono, el dispositivo pasa a ser suyo."""
+
+    cliente_id: str
+    token: str
+    plataforma: PlataformaDispositivo
+    version_app: str
+    id: str = field(default_factory=new_id)
+    registrado_en: datetime = field(default_factory=now_utc)
+    ultimo_visto_en: datetime = field(default_factory=now_utc)
