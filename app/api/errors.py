@@ -14,12 +14,16 @@ from app.domain import (
     ClienteYaExiste,
     ConflictoPoliza,
     ConsentimientoNoEncontrado,
+    CorreoInternoInvalido,
     CotizacionNoDisponible,
+    CuentaInternaYaExiste,
     DocumentoNoDisponible,
     DomainError,
     FueraDeRango,
+    IdentidadNoDisponible,
     ImagenInvalida,
     ImagenMuyGrande,
+    NombreSocioObligatorio,
     PendienteNoAplica,
     PolizaNoEncontrada,
     SolicitudPolizaInvalida,
@@ -168,6 +172,54 @@ def install_error_handlers(app: FastAPI) -> None:
             detail=str(exc),
             instance=str(request.url),
             codigo="DOCUMENTO_NO_DISPONIBLE",
+        )
+
+    @app.exception_handler(CorreoInternoInvalido)
+    async def _correo_interno_invalido(
+        request: Request, exc: CorreoInternoInvalido
+    ) -> JSONResponse:
+        return problema(
+            400,
+            "Solicitud inválida",
+            detail=str(exc),
+            instance=str(request.url),
+            errores=[{"campo": "correo", "mensaje": str(exc)}],
+        )
+
+    @app.exception_handler(NombreSocioObligatorio)
+    async def _nombre_socio_obligatorio(
+        request: Request, exc: NombreSocioObligatorio
+    ) -> JSONResponse:
+        return problema(
+            400,
+            "Solicitud inválida",
+            detail=str(exc),
+            instance=str(request.url),
+            errores=[{"campo": "nombre", "mensaje": str(exc)}],
+        )
+
+    @app.exception_handler(CuentaInternaYaExiste)
+    async def _cuenta_interna_ya_existe(
+        request: Request, exc: CuentaInternaYaExiste
+    ) -> JSONResponse:
+        return problema(
+            409,
+            "La cuenta ya existe",
+            detail=str(exc),
+            instance=str(request.url),
+            errores=[{"campo": "correo", "mensaje": str(exc)}],
+        )
+
+    @app.exception_handler(IdentidadNoDisponible)
+    async def _identidad_no_disponible(
+        request: Request, exc: IdentidadNoDisponible
+    ) -> JSONResponse:
+        return problema(
+            503,
+            "Identidad no disponible",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo="IDENTIDAD_NO_DISPONIBLE",
         )
 
     @app.exception_handler(DomainError)

@@ -30,7 +30,7 @@ def _app_operations(app) -> set[tuple[str, str]]:
     """Operaciones que FastAPI genera desde el código (su propio OpenAPI)."""
     ops: set[tuple[str, str]] = set()
     for path, item in app.openapi()["paths"].items():
-        if not path.startswith(("/v1/clientes", "/v1/polizas")):
+        if not path.startswith(("/v1/clientes", "/v1/polizas", "/v1/usuarios-internos")):
             continue
         for method in item:
             if method.lower() in {"get", "post", "put", "patch", "delete"}:

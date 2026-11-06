@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Configuración por variables de entorno (prefijo ``CORE_``)."""
 
-    model_config = SettingsConfigDict(env_prefix="CORE_", env_file=".env", extra="ignore")
+    # secrets_dir: lee valores montados como archivo por el add-on de Secret Manager de GKE (p. ej.
+    # CORE_ADMIN_SEED_PASSWORD). Si el directorio no existe (local, pruebas) solo emite una
+    # advertencia.
+    model_config = SettingsConfigDict(
+        env_prefix="CORE_", env_file=".env", secrets_dir="/var/secrets", extra="ignore"
+    )
 
     service_name: str = "svc-core"
     environment: str = "local"
@@ -36,6 +42,15 @@ class Settings(BaseSettings):
     web_url_verificacion: str = "https://solventa4bits.com/verificar-correo"
     correo_mercado: str = "CO"
     correo_idioma: str = "es-CO"
+
+    # Cuentas internas del personal (BITS-374): administradores y socios en Identity Platform.
+    # "off" (el endpoint responde 503) | "fake" (en memoria) | "real" (Identity Platform, con
+    # identity_project_id y las credenciales del pod).
+    cuentas_internas_backend: str = "off"
+    # Administrador de la semilla: si ambos están, al arrancar se crea esa cuenta ADMIN cuando no
+    # existe. Nunca pisa una cuenta existente. La contraseña viene de un secreto, no del código.
+    admin_seed_email: str | None = None
+    admin_seed_password: SecretStr | None = None
 
     # Avisos push (BITS-229): al emitirse una póliza, Core publica "EnviarPush" para los
     # dispositivos registrados del cliente y fn-notificaciones lo entrega por Firebase.
