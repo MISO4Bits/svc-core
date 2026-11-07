@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -430,3 +431,31 @@ async def test_el_cliente_no_puede_reportar_un_siniestro_parametrico():
         await servicio.reportar("cliente-1", reporte)
 
     assert error.value.campo == "tipo"
+
+
+async def test_el_id_de_la_ruta_no_puede_falsificar_lineas_del_log(caplog):
+    """Log injection (S5145): el id viene de la ruta y puede traer saltos de línea."""
+    idempotencia = InMemoryIdempotencyStore()
+    servicio = SiniestroService(
+        _Clientes(),
+        _Polizas(),
+        InMemorySiniestroRepository(),
+        InMemoryAlmacenEvidencias(),
+        CreditosFake(),
+        idempotencia,
+        max_bytes=3 * 1024 * 1024,
+        max_pixeles=40_000_000,
+    )
+    malicioso = "falso\r\nINFO svc_core: acceso concedido"
+    clave = f"siniestro-evidencias:cliente-1:{malicioso}:llave"
+    await idempotencia.put(clave, {"siniestroId": "x"})
+
+    with caplog.at_level(logging.INFO, logger="svc_core.siniestros"):
+        with pytest.raises(SiniestroNoEncontrado):
+            await servicio.entregar_evidencias(
+                "cliente-1", malicioso, (ArchivoEntrada(FOTO, ClaseArchivo.FOTO),), "llave"
+            )
+
+    [registro] = [r for r in caplog.records if "entrega repetida" in r.getMessage()]
+    assert "\r" not in registro.getMessage()
+    assert "\n" not in registro.getMessage()

@@ -215,7 +215,7 @@ class SiniestroService:
             else None
         )
         if clave is not None and await self._idempotency.get(clave) is not None:
-            logger.info("entrega repetida siniestro_id=%s", siniestro_id)
+            logger.info("entrega repetida siniestro_id=%s", sanear_para_log(siniestro_id))
             return await self.obtener(cliente_id, siniestro_id)
 
         siniestro = await self.obtener(cliente_id, siniestro_id)
