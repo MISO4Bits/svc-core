@@ -6,6 +6,7 @@ import base64
 from datetime import UTC, datetime
 
 from app.domain import (
+    ESTADOS_EN_CURSO,
     Cliente,
     Consentimiento,
     ConsentimientoScope,
@@ -18,11 +19,15 @@ from app.domain import (
     FiltroPolizas,
     MotivoRechazoPoliza,
     NumeroPolizaDuplicado,
+    NumeroSiniestroDuplicado,
     PaginaPolizas,
     Pendiente,
     Poliza,
     PolizaYaExiste,
+    Siniestro,
+    SiniestroEnCurso,
     TipoEvidencia,
+    TipoSiniestro,
     Vigencia,
     now_utc,
 )
@@ -357,4 +362,29 @@ class InMemoryDispositivoRepository:
             (d for d in self._por_token.values() if d.cliente_id == cliente_id),
             key=lambda d: d.ultimo_visto_en,
             reverse=True,
+        )
+
+
+class InMemorySiniestroRepository:
+    def __init__(self) -> None:
+        self._items: dict[str, Siniestro] = {}
+
+    async def crear(self, siniestro: Siniestro) -> None:
+        if any(x.numero == siniestro.numero for x in self._items.values()):
+            raise NumeroSiniestroDuplicado()
+        if await self.en_curso(siniestro.poliza_id, siniestro.tipo) is not None:
+            raise SiniestroEnCurso()
+        self._items[siniestro.id] = siniestro
+
+    async def obtener(self, siniestro_id: str) -> Siniestro | None:
+        return self._items.get(siniestro_id)
+
+    async def en_curso(self, poliza_id: str, tipo: TipoSiniestro) -> Siniestro | None:
+        return next(
+            (
+                x
+                for x in self._items.values()
+                if x.poliza_id == poliza_id and x.tipo == tipo and x.estado in ESTADOS_EN_CURSO
+            ),
+            None,
         )

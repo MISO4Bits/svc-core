@@ -126,6 +126,15 @@ class Settings(BaseSettings):
     consumidor_backend: str = "off"
     pubsub_subscription: str = "core-polizas"
 
+    # Siniestros (BITS-381): el saldo del crédito se consulta una sola vez, al reportar, en
+    # svc-perfilamiento (ruta interna). "fake" (sin hipotecas: el saldo sale de la póliza) | "http".
+    creditos_backend: str = "fake"
+    # Tráfico interno del clúster: sin TLS entre pods (igual que cotizacion_base_url).
+    perfilamiento_base_url: str = (
+        "http://svc-perfilamiento.svc-perfilamiento.svc.cluster.local"  # NOSONAR
+    )
+    perfilamiento_timeout_s: float = 1.0
+
     # Observabilidad (DI-008): OTLP/gRPC hacia Grafana Alloy dentro del
     # cluster. Deshabilitado por defecto — en local/tests no hay receptor
     # escuchando; se habilita vía CORE_OTEL_ENABLED=true en el manifiesto de

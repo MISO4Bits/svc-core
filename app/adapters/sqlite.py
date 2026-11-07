@@ -16,7 +16,10 @@ from decimal import Decimal
 import aiosqlite
 
 from app.domain import (
+    ESTADOS_EN_CURSO,
+    ArchivoSiniestro,
     Canal,
+    ClaseArchivo,
     Cliente,
     ClienteYaExiste,
     CoberturaContratada,
@@ -32,21 +35,28 @@ from app.domain import (
     EstadoConsentimiento,
     EstadoEvidencia,
     EstadoPoliza,
+    EstadoSiniestro,
     Evidencia,
     EvidenciaDePoliza,
     FiltroPolizas,
     MotivoRechazoPoliza,
     NumeroPolizaDuplicado,
+    NumeroSiniestroDuplicado,
     OrigenDatos,
+    OrigenSaldo,
     PaginaPolizas,
     Pendiente,
     PlataformaDispositivo,
     Poliza,
     PolizaYaExiste,
+    SaldoCredito,
+    Siniestro,
+    SiniestroEnCurso,
     TipoDecision,
     TipoDocumento,
     TipoEvidencia,
     TipoPendiente,
+    TipoSiniestro,
     Vigencia,
     now_utc,
 )
@@ -138,7 +148,7 @@ class SqliteDatabase:
 
     async def init(self) -> None:
         async with self.connect() as conn:
-            await conn.executescript(_SCHEMA + _ESQUEMA_POLIZAS)
+            await conn.executescript(_SCHEMA + _ESQUEMA_POLIZAS + _ESQUEMA_SINIESTROS)
             # Migración manual para bases de dev creadas antes de BITS-93: SQLite
             # no soporta "ADD COLUMN IF NOT EXISTS", así que se intenta y se
             # ignora el error si la columna ya existe. No agrega el UNIQUE(email)
@@ -1080,3 +1090,155 @@ class SqliteDispositivoRepository:
             )
             filas = await cursor.fetchall()
         return [_row_to_dispositivo(f) for f in filas]
+
+
+# --- Siniestros (BITS-381) ---
+
+_ESQUEMA_SINIESTROS = """
+CREATE TABLE IF NOT EXISTS siniestros (
+    id TEXT PRIMARY KEY,
+    numero TEXT NOT NULL,
+    cliente_id TEXT NOT NULL,
+    poliza_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    estado TEXT NOT NULL,
+    fecha_ocurrencia TEXT NOT NULL,
+    narracion TEXT,
+    archivos TEXT NOT NULL DEFAULT '[]',
+    saldo_credito TEXT NOT NULL,
+    destino_pago TEXT,
+    reportado_en TEXT NOT NULL,
+    ultima_entrega_en TEXT NOT NULL,
+    actualizado_en TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_numero ON siniestros (numero);
+-- Un siniestro en curso por póliza y cobertura: la base lo garantiza aunque lleguen dos reportes
+-- a la vez.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_en_curso ON siniestros (poliza_id, tipo)
+    WHERE estado IN ('EN_ESTUDIO', 'FALTA_INFORMACION');
+CREATE INDEX IF NOT EXISTS idx_siniestros_cliente ON siniestros (cliente_id, reportado_en);
+"""
+
+_COLUMNAS_SINIESTRO = (
+    "id, numero, cliente_id, poliza_id, tipo, estado, fecha_ocurrencia, narracion, archivos, "
+    "saldo_credito, destino_pago, reportado_en, ultima_entrega_en, actualizado_en"
+)
+
+
+def _archivo_a_dict(a: ArchivoSiniestro) -> dict:
+    return {
+        "id": a.id,
+        "clase": str(a.clase),
+        "referencia": a.referencia,
+        "contentType": a.content_type,
+        "entregadoEn": _utc(a.entregado_en),
+        "capturadoEn": _iso(a.capturado_en and a.capturado_en.astimezone(UTC)),
+        "latitud": a.latitud,
+        "longitud": a.longitud,
+    }
+
+
+def _dict_a_archivo(d: dict) -> ArchivoSiniestro:
+    return ArchivoSiniestro(
+        id=d["id"],
+        clase=ClaseArchivo(d["clase"]),
+        referencia=d["referencia"],
+        content_type=d["contentType"],
+        entregado_en=datetime.fromisoformat(d["entregadoEn"]),
+        capturado_en=_dt(d.get("capturadoEn")),
+        latitud=d.get("latitud"),
+        longitud=d.get("longitud"),
+    )
+
+
+def _siniestro_a_fila(x: Siniestro) -> tuple:
+    saldo = x.saldo_credito
+    return (
+        x.id,
+        x.numero,
+        x.cliente_id,
+        x.poliza_id,
+        str(x.tipo),
+        str(x.estado),
+        x.fecha_ocurrencia.isoformat(),
+        x.narracion,
+        json.dumps([_archivo_a_dict(a) for a in x.archivos]),
+        json.dumps(
+            {
+                "valor": str(saldo.valor),
+                "entidad": saldo.entidad,
+                "consultadoEn": _utc(saldo.consultado_en),
+                "origen": str(saldo.origen),
+            }
+        ),
+        json.dumps(x.destino_pago) if x.destino_pago is not None else None,
+        _utc(x.reportado_en),
+        _utc(x.ultima_entrega_en),
+        _utc(x.actualizado_en),
+    )
+
+
+def _fila_a_siniestro(row: aiosqlite.Row) -> Siniestro:
+    saldo = json.loads(row["saldo_credito"])
+    return Siniestro(
+        id=row["id"],
+        numero=row["numero"],
+        cliente_id=row["cliente_id"],
+        poliza_id=row["poliza_id"],
+        tipo=TipoSiniestro(row["tipo"]),
+        estado=EstadoSiniestro(row["estado"]),
+        fecha_ocurrencia=date.fromisoformat(row["fecha_ocurrencia"]),
+        narracion=row["narracion"],
+        archivos=tuple(_dict_a_archivo(a) for a in json.loads(row["archivos"])),
+        saldo_credito=SaldoCredito(
+            valor=Decimal(saldo["valor"]),
+            entidad=saldo["entidad"],
+            consultado_en=datetime.fromisoformat(saldo["consultadoEn"]),
+            origen=OrigenSaldo(saldo["origen"]),
+        ),
+        destino_pago=json.loads(row["destino_pago"]) if row["destino_pago"] else None,
+        reportado_en=datetime.fromisoformat(row["reportado_en"]),
+        ultima_entrega_en=datetime.fromisoformat(row["ultima_entrega_en"]),
+        actualizado_en=datetime.fromisoformat(row["actualizado_en"]),
+    )
+
+
+class SqliteSiniestroRepository:
+    def __init__(self, db: SqliteDatabase) -> None:
+        self._db = db
+
+    async def crear(self, siniestro: Siniestro) -> None:
+        async with self._db.connect() as conn:
+            try:
+                await conn.execute(
+                    f"INSERT INTO siniestros ({_COLUMNAS_SINIESTRO}) "
+                    f"VALUES ({', '.join('?' * 14)})",
+                    _siniestro_a_fila(siniestro),
+                )
+                await conn.commit()
+            except aiosqlite.IntegrityError as exc:
+                if "numero" in str(exc):
+                    raise NumeroSiniestroDuplicado() from exc
+                raise SiniestroEnCurso() from exc
+        logger.info(
+            "sqlite: siniestro creado siniestro_id=%s tipo=%s", siniestro.id, siniestro.tipo
+        )
+
+    async def obtener(self, siniestro_id: str) -> Siniestro | None:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"SELECT {_COLUMNAS_SINIESTRO} FROM siniestros WHERE id = ?", (siniestro_id,)
+            )
+            row = await cursor.fetchone()
+        return _fila_a_siniestro(row) if row else None
+
+    async def en_curso(self, poliza_id: str, tipo: TipoSiniestro) -> Siniestro | None:
+        marcas = ", ".join("?" * len(ESTADOS_EN_CURSO))
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"SELECT {_COLUMNAS_SINIESTRO} FROM siniestros "
+                f"WHERE poliza_id = ? AND tipo = ? AND estado IN ({marcas})",
+                (poliza_id, str(tipo), *(str(e) for e in ESTADOS_EN_CURSO)),
+            )
+            row = await cursor.fetchone()
+        return _fila_a_siniestro(row) if row else None

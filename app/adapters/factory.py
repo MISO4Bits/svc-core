@@ -12,6 +12,7 @@ from app.adapters.memory import (
     InMemoryEvidenciaRepository,
     InMemoryIdempotencyStore,
     InMemoryPolizaRepository,
+    InMemorySiniestroRepository,
 )
 from app.adapters.sqlite import (
     SqliteClienteRepository,
@@ -21,6 +22,7 @@ from app.adapters.sqlite import (
     SqliteEvidenciaRepository,
     SqliteIdempotencyStore,
     SqlitePolizaRepository,
+    SqliteSiniestroRepository,
 )
 from app.adapters.verificador_mock import VerificadorBiometricoMock, VerificadorMock
 from app.avisos import AvisoService
@@ -33,15 +35,18 @@ from app.ports import (
     ClienteRepository,
     ConsentimientoRepository,
     CotizacionPort,
+    CreditosPort,
     DispositivoRepository,
     DocumentoPolizaPort,
     EventPublisher,
     EvidenciaRepository,
     IdempotencyStore,
     PolizaRepository,
+    SiniestroRepository,
     VerificadorBiometrico,
     VerificadorDocumento,
 )
+from app.siniestros import SiniestroService
 
 
 def build_repositories(
@@ -163,6 +168,48 @@ def build_polizas(
     else:
         raise ValueError(f"documento_backend no soportado: {settings.documento_backend}")
     return repositorio, cotizaciones, documentos, cerrables
+
+
+def build_siniestros(
+    settings: Settings,
+    clientes: ClienteRepository,
+    polizas: PolizaRepository,
+    almacen: AlmacenEvidencias,
+    idempotency: IdempotencyStore,
+) -> tuple[SiniestroService, list[object]]:
+    """Servicio de siniestros y los adaptadores que hay que cerrar al apagar (BITS-381)."""
+    if settings.repository_backend == "memory":
+        repositorio: SiniestroRepository = InMemorySiniestroRepository()
+    elif settings.repository_backend == "sqlite":
+        repositorio = SqliteSiniestroRepository(SqliteDatabase(settings.database_path))
+    else:
+        raise ValueError(f"repository_backend no soportado: {settings.repository_backend}")
+
+    cerrables: list[object] = []
+    if settings.creditos_backend == "fake":
+        from app.adapters.creditos_fake import CreditosFake
+
+        creditos: CreditosPort = CreditosFake()
+    elif settings.creditos_backend == "http":
+        from app.adapters.perfilamiento_http import PerfilamientoHttp
+
+        http = PerfilamientoHttp(settings.perfilamiento_base_url, settings.perfilamiento_timeout_s)
+        creditos = http
+        cerrables.append(http)
+    else:
+        raise ValueError(f"creditos_backend no soportado: {settings.creditos_backend}")
+
+    servicio = SiniestroService(
+        clientes,
+        polizas,
+        repositorio,
+        almacen,
+        creditos,
+        idempotency,
+        max_bytes=settings.evidencia_max_bytes,
+        max_pixeles=settings.evidencia_max_pixeles,
+    )
+    return servicio, cerrables
 
 
 def build_dispositivos(settings: Settings) -> DispositivoRepository:

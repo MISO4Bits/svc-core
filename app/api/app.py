@@ -18,6 +18,7 @@ from app.adapters.factory import (
     build_notificaciones,
     build_polizas,
     build_repositories,
+    build_siniestros,
     maybe_init,
 )
 from app.api.dispositivos import router as dispositivos_router
@@ -25,6 +26,7 @@ from app.api.errors import install_error_handlers
 from app.api.evidencias import router as evidencias_router
 from app.api.polizas import router as polizas_router
 from app.api.routes import router
+from app.api.siniestros import router as siniestros_router
 from app.api.usuarios_internos import router as usuarios_internos_router
 from app.config import Settings, get_settings
 from app.cuentas_internas import CuentasInternasService
@@ -65,7 +67,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repo_polizas, cotizaciones, documentos, cerrables_polizas = build_polizas(
         settings, repo_evidencias
     )
-    cerrables = [*cerrables, *cerrables_polizas, *cerrables_cuentas]
+    siniestros, cerrables_siniestros = build_siniestros(
+        settings, clientes, repo_polizas, almacen, idempotency
+    )
+    cerrables = [*cerrables, *cerrables_polizas, *cerrables_cuentas, *cerrables_siniestros]
     repo_dispositivos = build_dispositivos(settings)
     polizas = PolizaService(
         clientes,
@@ -162,6 +167,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.polizas = polizas
     app.state.dispositivos = dispositivos
     app.state.cuentas_internas = cuentas_internas
+    app.state.siniestros = siniestros
 
     install_error_handlers(app)
     app.include_router(router, prefix="/v1")
@@ -169,6 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(polizas_router, prefix="/v1")
     app.include_router(dispositivos_router, prefix="/v1")
     app.include_router(usuarios_internos_router, prefix="/v1")
+    app.include_router(siniestros_router, prefix="/v1")
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:

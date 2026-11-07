@@ -267,6 +267,9 @@ class EstadoPoliza(StrEnum):
     EMITIDA = "EMITIDA"
     RECHAZADA = "RECHAZADA"
     VENCIDA = "VENCIDA"
+    # Rechazó la renovación y llegó el aniversario (BITS-387). Todavía acepta siniestros
+    # ocurridos dentro de su vigencia.
+    DESACTIVADA = "DESACTIVADA"
 
 
 class CodigoCobertura(StrEnum):
@@ -729,3 +732,153 @@ class IdentidadNoDisponible(DomainError):
 
     def __init__(self) -> None:
         super().__init__("El proveedor de identidad no está disponible, intenta de nuevo")
+
+
+# --- Siniestros (BITS-381) ---
+
+# El cliente aporta como mucho unos pocos archivos por reporte: un tope evita subidas sin límite.
+MAX_ARCHIVOS_SINIESTRO = 10
+
+
+class TipoSiniestro(StrEnum):
+    INCAPACIDAD_TOTAL = "INCAPACIDAD_TOTAL"  # cobertura VIDA
+    INCENDIO_TERREMOTO = "INCENDIO_TERREMOTO"  # cobertura HOGAR (Tu casa)
+
+    @property
+    def cobertura(self) -> CodigoCobertura:
+        return (
+            CodigoCobertura.VIDA
+            if self is TipoSiniestro.INCAPACIDAD_TOTAL
+            else CodigoCobertura.HOGAR
+        )
+
+
+class EstadoSiniestro(StrEnum):
+    EN_ESTUDIO = "EN_ESTUDIO"
+    FALTA_INFORMACION = "FALTA_INFORMACION"
+    PAGADO = "PAGADO"
+    RECHAZADO = "RECHAZADO"
+
+
+# Mientras un siniestro está en alguno de estos estados, su cobertura no admite otro reporte.
+ESTADOS_EN_CURSO = (EstadoSiniestro.EN_ESTUDIO, EstadoSiniestro.FALTA_INFORMACION)
+
+
+class ClaseArchivo(StrEnum):
+    FOTO = "FOTO"
+    DOCUMENTO = "DOCUMENTO"
+
+
+class OrigenSaldo(StrEnum):
+    OPEN_FINANCE = "OPEN_FINANCE"
+    POLIZA = "POLIZA"
+
+
+@dataclass(frozen=True)
+class ArchivoSiniestro:
+    """``latitud`` y ``longitud`` son ``None`` si el cliente negó el permiso de ubicación.
+    ``referencia`` es la clave en el bucket de evidencias."""
+
+    id: str
+    clase: ClaseArchivo
+    referencia: str
+    content_type: str
+    entregado_en: datetime
+    capturado_en: datetime | None = None
+    latitud: float | None = None
+    longitud: float | None = None
+
+
+@dataclass(frozen=True)
+class SaldoCredito:
+    """Saldo del crédito guardado una sola vez, al reportar. Es lo que se paga al banco."""
+
+    valor: Decimal
+    entidad: str
+    consultado_en: datetime
+    origen: OrigenSaldo
+
+
+@dataclass
+class Siniestro:
+    """``numero`` es el radicado que ve el cliente. ``destino_pago`` se guarda tal como llega."""
+
+    cliente_id: str
+    poliza_id: str
+    tipo: TipoSiniestro
+    fecha_ocurrencia: date
+    saldo_credito: SaldoCredito
+    numero: str
+    narracion: str | None = None
+    archivos: tuple[ArchivoSiniestro, ...] = ()
+    destino_pago: dict | None = None
+    estado: EstadoSiniestro = EstadoSiniestro.EN_ESTUDIO
+    id: str = field(default_factory=new_id)
+    reportado_en: datetime = field(default_factory=now_utc)
+    ultima_entrega_en: datetime = field(default_factory=now_utc)
+    actualizado_en: datetime = field(default_factory=now_utc)
+
+
+class ConflictoSiniestro(DomainError):
+    """Base de los conflictos 409 de siniestros con un ``codigo`` estable."""
+
+    codigo = "CONFLICTO"
+
+
+class FueraDeVigencia(ConflictoSiniestro):
+    codigo = "FUERA_DE_VIGENCIA"
+
+    def __init__(self) -> None:
+        super().__init__("Solo puedes reportar lo que ocurrió mientras la póliza estaba activa")
+
+
+class SiniestroEnCurso(ConflictoSiniestro):
+    codigo = "SINIESTRO_EN_CURSO"
+
+    def __init__(self) -> None:
+        super().__init__("La póliza ya tiene un siniestro en curso para esa cobertura")
+
+
+class TipoNoCubierto(DomainError):
+    def __init__(self, tipo: TipoSiniestro) -> None:
+        super().__init__(f"La póliza no tiene la cobertura de {tipo}")
+        self.tipo = tipo
+
+
+class SolicitudSiniestroInvalida(SolicitudPolizaInvalida):
+    """Reporte bien formado pero que no se puede atender (falta la narración, el destino del pago
+    o la evidencia). Responde 400 con el campo, como las solicitudes de póliza."""
+
+
+class NumeroSiniestroDuplicado(DomainError):
+    """El radicado generado ya lo tiene otro siniestro; el servicio genera otro."""
+
+
+class SiniestroNoEncontrado(DomainError):
+    def __init__(self, siniestro_id: str) -> None:
+        super().__init__(f"Siniestro {siniestro_id} no encontrado")
+        self.siniestro_id = siniestro_id
+
+
+@dataclass(frozen=True)
+class HipotecaReportada:
+    """Hipoteca abierta como la reporta svc-perfilamiento (nombre de la entidad sin normalizar)."""
+
+    entidad_acreedora: str
+    saldo_insoluto: Decimal
+    cuota_mensual: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class CreditosReportados:
+    """``estado`` es ``DISPONIBLE``, ``NO_DISPONIBLE`` o ``SIN_CONSENTIMIENTO``."""
+
+    estado: str
+    hipotecas: tuple[HipotecaReportada, ...] = ()
+
+
+def generar_numero_siniestro(reportado_en: datetime, aleatorio: Callable[[str], str]) -> str:
+    """``SIN-AAAA-XXXXXX``: el radicado que ve el cliente. Seis caracteres aleatorios, como el de
+    la póliza, para no crear un cuello de botella al escribir."""
+    sufijo = "".join(aleatorio(ALFABETO_NUMERO_POLIZA) for _ in range(6))
+    return f"SIN-{reportado_en.year}-{sufijo}"
