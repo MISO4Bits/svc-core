@@ -47,6 +47,8 @@ tags:
     description: Cuentas del personal de Solventa, administradores y socios (BITS-374).
   - name: Siniestros
     description: Reporte de siniestros del cliente (BITS-381).
+  - name: Siniestros (backoffice)
+    description: Bandeja del ADMIN, archivos y decisiones sobre los siniestros (BITS-377).
 
 security:
   - serviceAuth: []
@@ -906,6 +908,133 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problema' }
+
+  /v1/siniestros:
+    get:
+      operationId: listarBandejaDeSiniestros
+      tags: [Siniestros (backoffice)]
+      summary: Bandeja de siniestros de todos los clientes
+      description: |
+        Interno y sin gateway: solo lo llama bff-web, desde la ruta que exige el rol `ADMIN`.
+
+        Sin filtros trae todos. `estado=EN_ESTUDIO` es la bandeja de trabajo (los recién reportados y
+        los que volvieron porque el cliente envió lo que faltaba); `automatico=true`, los pagos por
+        sismo, en solo lectura. Va ordenada por plazo: primero los que corren (`EN_ESTUDIO`), del que
+        vence antes al que vence después, y luego los demás, del más reciente al más antiguo.
+      parameters:
+        - name: estado
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/EstadoSiniestro' }
+        - name: automatico
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Los siniestros que cumplen los filtros (vacía si no hay).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SiniestroInternoResumen' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+
+  /v1/siniestros/{siniestroId}:
+    parameters:
+      - $ref: '#/components/parameters/SiniestroId'
+    get:
+      operationId: obtenerSiniestroInterno
+      tags: [Siniestros (backoffice)]
+      summary: Detalle de un siniestro para el ADMIN
+      description: |
+        El detalle del cliente más lo que solo el `ADMIN` ve: el cliente, la póliza con la cobertura
+        afectada y su suma asegurada, el saldo del crédito guardado al reportar con su origen y su
+        fecha, cómo recibe el pago el cliente y las decisiones con quién las tomó.
+      responses:
+        '200':
+          description: El siniestro.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SiniestroInterno' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /v1/siniestros/{siniestroId}/evidencias/{evidenciaId}:
+    parameters:
+      - $ref: '#/components/parameters/SiniestroId'
+      - name: evidenciaId
+        in: path
+        required: true
+        description: El `id` de un archivo del siniestro (`archivos[].id` del detalle).
+        schema: { type: string, format: uuid }
+    get:
+      operationId: obtenerArchivoDelSiniestro
+      tags: [Siniestros (backoffice)]
+      summary: Devuelve un archivo del siniestro
+      description: |
+        La imagen tal como se guardó, para abrirla en la bandeja sin descargarla
+        (`Content-Disposition: inline`). Sin caché.
+      responses:
+        '200':
+          description: El archivo.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /v1/siniestros/{siniestroId}/decisiones:
+    parameters:
+      - $ref: '#/components/parameters/SiniestroId'
+    post:
+      operationId: decidirSiniestro
+      tags: [Siniestros (backoffice)]
+      summary: Paga, pide más evidencia o rechaza un siniestro
+      description: |
+        `PAGAR`, `PEDIR_EVIDENCIA` o `RECHAZAR`, siempre con el `agente` (el usuario de la sesión, que
+        llena el BFF). Cada decisión guarda quién la tomó, cuándo, cuál fue y el valor o el motivo. No
+        hay nota interna. Una decisión con un campo que no le corresponde es `400`.
+
+        | Decisión | Campos | Resultado |
+        |---|---|---|
+        | `PAGAR`, incapacidad total | ninguno más | Una línea `BANCO` por el saldo guardado |
+        | `PAGAR`, Tu casa reparable | `dano: REPARABLE`, `valor` | Una línea `CLIENTE` al destino que eligió |
+        | `PAGAR`, Tu casa pérdida total | `dano: PERDIDA_TOTAL`, `valor` | `BANCO` hasta el saldo guardado y `CLIENTE` por el resto; si el valor no supera el saldo, solo `BANCO` |
+        | `PEDIR_EVIDENCIA` | `detalle` | `FALTA_INFORMACION`, con `evidenciaPedida` |
+        | `RECHAZAR` | `motivo` | `RECHAZADO`, con el motivo que ve el cliente |
+
+        El `valor` de Tu casa no puede superar la suma asegurada de `HOGAR` (`422`). Pagar, pedir o
+        rechazar avisa por push al cliente.
+
+        **Una sola orden de pago por siniestro.** La llave es el siniestro: pagar un siniestro ya
+        `PAGADO`, al mismo tiempo o después, no crea otra orden y devuelve la que existe. Un siniestro
+        ya `PAGADO` o `RECHAZADO` no cambia con ninguna decisión: se devuelve como quedó. Uno en
+        `FALTA_INFORMACION` ya salió de la bandeja y responde `409`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecidirSiniestroRequest' }
+      responses:
+        '200':
+          description: El siniestro después de la decisión (o como ya estaba).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SiniestroInterno' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: El siniestro está en `FALTA_INFORMACION` (`codigo = ESTADO_NO_PERMITE`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemaSiniestro' }
+        '422':
+          description: El `valor` supera la suma asegurada (`codigo = VALOR_SUPERA_SUMA_ASEGURADA`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemaSiniestro' }
 
 components:
 
@@ -1926,7 +2055,12 @@ components:
         properties:
           codigo:
             type: string
-            enum: [FUERA_DE_VIGENCIA, SINIESTRO_EN_CURSO, TIPO_NO_CUBIERTO, ESTADO_NO_PERMITE]
+            enum:
+              - FUERA_DE_VIGENCIA
+              - SINIESTRO_EN_CURSO
+              - TIPO_NO_CUBIERTO
+              - ESTADO_NO_PERMITE
+              - VALOR_SUPERA_SUMA_ASEGURADA
 
     EntregarEvidenciasDatos:
       type: object
@@ -2059,3 +2193,134 @@ components:
             - { $ref: '#/components/schemas/EventoSismo' }
             - { type: 'null' }
           description: Solo en el paramétrico.
+
+    DecidirSiniestroRequest:
+      type: object
+      additionalProperties: false
+      required: [decision, agente]
+      properties:
+        decision: { type: string, enum: [PAGAR, PEDIR_EVIDENCIA, RECHAZAR] }
+        agente:
+          type: string
+          minLength: 3
+          maxLength: 254
+          description: El usuario de la sesión del ADMIN. Lo llena el BFF; quien decide no lo escribe.
+        dano:
+          type: string
+          enum: [REPARABLE, PERDIDA_TOTAL]
+          description: Obligatorio al pagar Tu casa. No se envía en incapacidad total.
+        valor:
+          type: number
+          exclusiveMinimum: 0
+          description: Obligatorio al pagar Tu casa; no puede superar la suma asegurada de HOGAR.
+        detalle:
+          type: string
+          maxLength: 2000
+          description: Obligatorio en PEDIR_EVIDENCIA. Es lo que ve el cliente en lo que pedimos.
+        motivo:
+          type: string
+          maxLength: 2000
+          description: Obligatorio en RECHAZAR. Es lo que ve el cliente.
+
+    PolizaDelSiniestro:
+      type: object
+      additionalProperties: false
+      required: [id, cobertura, sumaAsegurada]
+      properties:
+        id: { type: string }
+        numero: { type: [string, 'null'] }
+        cobertura: { type: string, enum: [VIDA, HOGAR] }
+        sumaAsegurada: { type: number }
+
+    SaldoCredito:
+      type: object
+      additionalProperties: false
+      required: [valor, entidad, consultadoEn, origen]
+      description: El saldo guardado una sola vez al reportar. Es lo que se paga al banco.
+      properties:
+        valor: { type: number }
+        entidad: { type: string }
+        consultadoEn: { type: string, format: date-time }
+        origen: { type: string, enum: [OPEN_FINANCE, POLIZA] }
+
+    DecisionSiniestro:
+      type: object
+      additionalProperties: false
+      required: [agente, decision, fecha]
+      properties:
+        agente: { type: string, description: Quién la tomó, el usuario de la sesión. }
+        decision: { type: string, enum: [PAGAR, PEDIR_EVIDENCIA, RECHAZAR] }
+        fecha: { type: string, format: date-time }
+        dano: { type: [string, 'null'], enum: [REPARABLE, PERDIDA_TOTAL, null] }
+        valor: { type: [number, 'null'] }
+        detalle: { type: [string, 'null'] }
+        motivo: { type: [string, 'null'] }
+
+    SiniestroInternoResumen:
+      type: object
+      additionalProperties: false
+      required:
+        [id, numero, clienteId, polizaId, tipo, automatico, estado, reportadoEn, actualizadoEn]
+      description: Una fila de la bandeja.
+      properties:
+        id: { type: string, format: uuid }
+        numero: { type: string }
+        clienteId: { type: string }
+        polizaId: { type: string }
+        tipo: { $ref: '#/components/schemas/TipoSiniestro' }
+        automatico: { type: boolean }
+        estado: { $ref: '#/components/schemas/EstadoSiniestro' }
+        reportadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+        fechaLimite:
+          type: [string, 'null']
+          format: date-time
+          description: 'Solo en `EN_ESTUDIO`: la última entrega más un mes (art. 1080).'
+
+    SiniestroInterno:
+      type: object
+      additionalProperties: false
+      required:
+        [id, numero, clienteId, polizaId, tipo, automatico, estado, reportadoEn, actualizadoEn,
+         fechaOcurrencia, ultimaEntregaEn, archivos, poliza, saldoCredito, decisiones]
+      description: 'El detalle para el ADMIN. Interno: no sale por el portal del cliente.'
+      properties:
+        id: { type: string, format: uuid }
+        numero: { type: string }
+        clienteId: { type: string }
+        polizaId: { type: string }
+        tipo: { $ref: '#/components/schemas/TipoSiniestro' }
+        automatico: { type: boolean }
+        estado: { $ref: '#/components/schemas/EstadoSiniestro' }
+        reportadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+        fechaOcurrencia: { type: string, format: date }
+        narracion: { type: [string, 'null'] }
+        ultimaEntregaEn: { type: string, format: date-time }
+        fechaLimite: { type: [string, 'null'], format: date-time }
+        evidenciaPedida:
+          oneOf:
+            - { $ref: '#/components/schemas/EvidenciaPedida' }
+            - { type: 'null' }
+        motivoRechazo: { type: [string, 'null'] }
+        pago:
+          oneOf:
+            - { $ref: '#/components/schemas/Pago' }
+            - { type: 'null' }
+        archivos:
+          type: array
+          items: { $ref: '#/components/schemas/ArchivoSiniestro' }
+        evento:
+          oneOf:
+            - { $ref: '#/components/schemas/EventoSismo' }
+            - { type: 'null' }
+        poliza: { $ref: '#/components/schemas/PolizaDelSiniestro' }
+        saldoCredito: { $ref: '#/components/schemas/SaldoCredito' }
+        destinoPago:
+          description: Cómo recibe el pago el cliente, tal como lo eligió al reportar.
+          oneOf:
+            - { $ref: '#/components/schemas/DestinoPago' }
+            - { type: 'null' }
+        decisiones:
+          type: array
+          items: { $ref: '#/components/schemas/DecisionSiniestro' }

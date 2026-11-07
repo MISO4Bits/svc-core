@@ -39,7 +39,7 @@ async def _pedir_evidencia(app, siniestro_id: str, detalle: str = "Falta el reci
     """Lo que hará la bandeja del ADMIN (BITS-377), llamado directo sobre el dominio."""
     repositorio = app.state.siniestros._siniestros
     siniestro = await repositorio.obtener(siniestro_id)
-    siniestro.pedir_evidencia(detalle, datetime.now(UTC))
+    siniestro.pedir_evidencia(detalle, datetime.now(UTC), "admin@solventa4bits.com")
     assert await repositorio.actualizar(siniestro, EstadoSiniestro.EN_ESTUDIO)
 
 

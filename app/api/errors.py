@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.domain import (
+    ArchivoNoEncontrado,
     ClienteNoActivo,
     ClienteNoEncontrado,
     ClienteYaExiste,
@@ -30,6 +31,7 @@ from app.domain import (
     SiniestroNoEncontrado,
     SolicitudPolizaInvalida,
     TipoNoCubierto,
+    ValorSuperaSumaAsegurada,
 )
 from app.logging_utils import sanear_para_log
 
@@ -151,6 +153,23 @@ def install_error_handlers(app: FastAPI) -> None:
             detail=str(exc),
             instance=str(request.url),
             codigo=exc.codigo,
+        )
+
+    @app.exception_handler(ArchivoNoEncontrado)
+    async def _archivo_no_encontrado(request: Request, exc: ArchivoNoEncontrado) -> JSONResponse:
+        return problema(404, "Archivo no encontrado", detail=str(exc), instance=str(request.url))
+
+    @app.exception_handler(ValorSuperaSumaAsegurada)
+    async def _valor_supera_suma_asegurada(
+        request: Request, exc: ValorSuperaSumaAsegurada
+    ) -> JSONResponse:
+        return problema(
+            422,
+            "El valor supera la suma asegurada",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo="VALOR_SUPERA_SUMA_ASEGURADA",
+            errores=[{"campo": "valor", "mensaje": str(exc)}],
         )
 
     @app.exception_handler(SiniestroNoEncontrado)

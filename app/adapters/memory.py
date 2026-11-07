@@ -391,6 +391,18 @@ class InMemorySiniestroRepository:
             replace(x) for x in sorted(propios, key=lambda x: (-x.reportado_en.timestamp(), x.id))
         ]
 
+    async def listar(
+        self, estado: EstadoSiniestro | None, automatico: bool | None
+    ) -> list[Siniestro]:
+        coinciden = [
+            x
+            for x in self._items.values()
+            if (estado is None or x.estado is estado)
+            and (automatico is None or x.automatico is automatico)
+        ]
+        ordenados = sorted(coinciden, key=lambda x: (-x.reportado_en.timestamp(), x.id))
+        return [replace(x) for x in ordenados]
+
     async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
         actual = self._items.get(siniestro.id)
         if actual is None or actual.estado is not estado_anterior:

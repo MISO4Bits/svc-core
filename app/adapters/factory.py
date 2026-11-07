@@ -176,6 +176,7 @@ def build_siniestros(
     polizas: PolizaRepository,
     almacen: AlmacenEvidencias,
     idempotency: IdempotencyStore,
+    avisos: AvisoService | None = None,
 ) -> tuple[SiniestroService, list[object]]:
     """Servicio de siniestros y los adaptadores que hay que cerrar al apagar (BITS-381)."""
     if settings.repository_backend == "memory":
@@ -208,6 +209,7 @@ def build_siniestros(
         idempotency,
         max_bytes=settings.evidencia_max_bytes,
         max_pixeles=settings.evidencia_max_pixeles,
+        avisos=avisos,
     )
     return servicio, cerrables
 

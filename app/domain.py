@@ -801,6 +801,34 @@ class SaldoCredito:
     origen: OrigenSaldo
 
 
+class TipoDecisionSiniestro(StrEnum):
+    PAGAR = "PAGAR"
+    PEDIR_EVIDENCIA = "PEDIR_EVIDENCIA"
+    RECHAZAR = "RECHAZAR"
+
+
+class DanoHogar(StrEnum):
+    """Cómo queda la casa. Define a quién se paga: el cliente repara, o hay pérdida total y el
+    banco cobra primero hasta el saldo del crédito."""
+
+    REPARABLE = "REPARABLE"
+    PERDIDA_TOTAL = "PERDIDA_TOTAL"
+
+
+@dataclass(frozen=True)
+class DecisionSiniestro:
+    """Lo que cada decisión deja: quién la tomó (el usuario de la sesión), cuándo, cuál fue y el
+    valor o el motivo. No hay nota interna."""
+
+    agente: str
+    decision: TipoDecisionSiniestro
+    fecha: datetime
+    dano: DanoHogar | None = None
+    valor: Decimal | None = None
+    detalle: str | None = None  # lo que se pidió, en PEDIR_EVIDENCIA
+    motivo: str | None = None  # lo que ve el cliente, en RECHAZAR
+
+
 @dataclass(frozen=True)
 class EvidenciaPedida:
     """Lo que el ``ADMIN`` escribió al pedir más evidencia, tal como lo ve el cliente."""
@@ -874,6 +902,7 @@ class Siniestro:
     evidencia_pedida: EvidenciaPedida | None = None
     motivo_rechazo: str | None = None
     pago: Pago | None = None
+    decisiones: tuple[DecisionSiniestro, ...] = ()
     # Solo el paramétrico (BITS-386): lo creó el sismo y no una persona; ``evento`` es
     # ``{fecha, municipio, magnitud}``.
     automatico: bool = False
@@ -891,10 +920,17 @@ class Siniestro:
         if self.estado is not estado:
             raise TransicionInvalida(self.estado)
 
-    def pedir_evidencia(self, detalle: str, ahora: datetime) -> None:
+    def pedir_evidencia(self, detalle: str, ahora: datetime, agente: str) -> None:
         self._exigir(EstadoSiniestro.EN_ESTUDIO)
+        detalle = detalle.strip()
         self.estado = EstadoSiniestro.FALTA_INFORMACION
-        self.evidencia_pedida = EvidenciaPedida(detalle.strip(), ahora)
+        self.evidencia_pedida = EvidenciaPedida(detalle, ahora)
+        self.decisiones = (
+            *self.decisiones,
+            DecisionSiniestro(
+                agente, TipoDecisionSiniestro.PEDIR_EVIDENCIA, ahora, detalle=detalle
+            ),
+        )
         self.actualizado_en = ahora
 
     def entregar_evidencia(self, archivos: tuple[ArchivoSiniestro, ...], ahora: datetime) -> None:
@@ -904,17 +940,43 @@ class Siniestro:
         self.estado = EstadoSiniestro.EN_ESTUDIO
         self.actualizado_en = ahora
 
-    def pagar(self, pago: Pago, ahora: datetime) -> None:
+    def pagar(
+        self,
+        pago: Pago,
+        ahora: datetime,
+        agente: str,
+        *,
+        dano: DanoHogar | None = None,
+        valor: Decimal | None = None,
+    ) -> None:
         self._exigir(EstadoSiniestro.EN_ESTUDIO)
         self.estado = EstadoSiniestro.PAGADO
         self.pago = pago
+        self.decisiones = (
+            *self.decisiones,
+            DecisionSiniestro(agente, TipoDecisionSiniestro.PAGAR, ahora, dano=dano, valor=valor),
+        )
         self.actualizado_en = ahora
 
-    def rechazar(self, motivo: str, ahora: datetime) -> None:
+    def rechazar(self, motivo: str, ahora: datetime, agente: str) -> None:
         self._exigir(EstadoSiniestro.EN_ESTUDIO)
+        motivo = motivo.strip()
         self.estado = EstadoSiniestro.RECHAZADO
-        self.motivo_rechazo = motivo.strip()
+        self.motivo_rechazo = motivo
+        self.decisiones = (
+            *self.decisiones,
+            DecisionSiniestro(agente, TipoDecisionSiniestro.RECHAZAR, ahora, motivo=motivo),
+        )
         self.actualizado_en = ahora
+
+
+class ValorSuperaSumaAsegurada(DomainError):
+    """El valor que el ``ADMIN`` quiere pagar excede la suma asegurada de la cobertura. Responde
+    422: la solicitud está bien formada pero la regla de negocio no se cumple."""
+
+    def __init__(self, suma_asegurada: Decimal) -> None:
+        super().__init__(f"El valor no puede superar la suma asegurada ({suma_asegurada})")
+        self.suma_asegurada = suma_asegurada
 
 
 class FueraDeVigencia(ConflictoSiniestro):
@@ -944,6 +1006,12 @@ class SolicitudSiniestroInvalida(SolicitudPolizaInvalida):
 
 class NumeroSiniestroDuplicado(DomainError):
     """El radicado generado ya lo tiene otro siniestro; el servicio genera otro."""
+
+
+class ArchivoNoEncontrado(DomainError):
+    def __init__(self, archivo_id: str) -> None:
+        super().__init__(f"Archivo {archivo_id} no encontrado")
+        self.archivo_id = archivo_id
 
 
 class SiniestroNoEncontrado(DomainError):

@@ -16,6 +16,7 @@ from app.domain import (
     CodigoCobertura,
     CodigoPendiente,
     ConsentimientoScope,
+    DanoHogar,
     EstadoCliente,
     EstadoConsentimiento,
     EstadoDocumentoPoliza,
@@ -24,9 +25,11 @@ from app.domain import (
     EstadoSiniestro,
     MotivoRechazo,
     OrigenDatos,
+    OrigenSaldo,
     PlataformaDispositivo,
     RolInterno,
     TipoDecision,
+    TipoDecisionSiniestro,
     TipoDocumento,
     TipoEvidencia,
     TipoPendiente,
@@ -428,3 +431,59 @@ class SiniestroOut(SiniestroResumenOut):
     pago: PagoOut | None = None
     archivos: list[ArchivoSiniestroOut]
     evento: EventoSismoOut | None = None
+
+
+# --- Bandeja del ADMIN (BITS-377) ---
+
+
+class DecidirSiniestroRequest(_Model):
+    """La decisión del ``ADMIN``. ``agente`` lo llena el BFF con el usuario de la sesión."""
+
+    decision: TipoDecisionSiniestro
+    agente: str = Field(min_length=3, max_length=254)
+    dano: DanoHogar | None = None
+    valor: float | None = Field(default=None, gt=0, le=1_000_000_000_000)
+    detalle: str | None = Field(default=None, max_length=2000)
+    motivo: str | None = Field(default=None, max_length=2000)
+
+
+class PolizaDelSiniestroOut(_Model):
+    id: str
+    numero: str | None = None
+    cobertura: CodigoCobertura
+    suma_asegurada: float
+
+
+class SaldoCreditoOut(_Model):
+    valor: float
+    entidad: str
+    consultado_en: AwareDatetime
+    origen: OrigenSaldo
+
+
+class DecisionSiniestroOut(_Model):
+    agente: str
+    decision: TipoDecisionSiniestro
+    fecha: AwareDatetime
+    dano: DanoHogar | None = None
+    valor: float | None = None
+    detalle: str | None = None
+    motivo: str | None = None
+
+
+class SiniestroInternoResumenOut(SiniestroResumenOut):
+    """Una fila de la bandeja: lo que el ``ADMIN`` necesita para ordenar y abrir."""
+
+    cliente_id: str
+    fecha_limite: AwareDatetime | None = None
+
+
+class SiniestroInternoOut(SiniestroOut):
+    """El detalle del ``ADMIN``: el del cliente más el saldo guardado, cómo recibe el pago, la
+    póliza afectada y las decisiones. Interno: no sale por el portal del cliente."""
+
+    cliente_id: str
+    poliza: PolizaDelSiniestroOut
+    saldo_credito: SaldoCreditoOut
+    destino_pago: dict | None = None
+    decisiones: list[DecisionSiniestroOut]

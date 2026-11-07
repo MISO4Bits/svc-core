@@ -41,6 +41,7 @@ from tests.unit.test_siniestros import (
 )
 
 FOTO = imagenes.a_bytes(imagenes.sin_tarjeta())
+AGENTE = "admin@solventa4bits.com"
 PAGO = Pago(
     AHORA,
     (
@@ -83,7 +84,7 @@ def test_la_fecha_limite_ajusta_el_dia_al_fin_de_un_mes_mas_corto():
 def test_pedir_evidencia_detiene_el_reloj_y_guarda_lo_pedido():
     siniestro = _siniestro()
 
-    siniestro.pedir_evidencia("  Falta el recibo de la reparación  ", AHORA)
+    siniestro.pedir_evidencia("  Falta el recibo de la reparación  ", AHORA, AGENTE)
 
     assert siniestro.estado is EstadoSiniestro.FALTA_INFORMACION
     assert siniestro.evidencia_pedida == EvidenciaPedida("Falta el recibo de la reparación", AHORA)
@@ -93,7 +94,7 @@ def test_pedir_evidencia_detiene_el_reloj_y_guarda_lo_pedido():
 
 def test_entregar_evidencia_vuelve_a_estudio_y_reinicia_el_plazo():
     siniestro = _siniestro()
-    siniestro.pedir_evidencia("Falta algo", AHORA)
+    siniestro.pedir_evidencia("Falta algo", AHORA, AGENTE)
     entrega = AHORA + timedelta(days=3)
 
     siniestro.entregar_evidencia((_archivo(entregado_en=entrega),), entrega)
@@ -109,7 +110,7 @@ def test_entregar_evidencia_vuelve_a_estudio_y_reinicia_el_plazo():
 def test_pagar_deja_la_orden_y_cierra_el_siniestro():
     siniestro = _siniestro()
 
-    siniestro.pagar(PAGO, AHORA)
+    siniestro.pagar(PAGO, AHORA, AGENTE)
 
     assert siniestro.estado is EstadoSiniestro.PAGADO
     assert siniestro.pago == PAGO
@@ -119,7 +120,7 @@ def test_pagar_deja_la_orden_y_cierra_el_siniestro():
 def test_rechazar_guarda_el_motivo_que_ve_el_cliente():
     siniestro = _siniestro()
 
-    siniestro.rechazar("  El evento no está cubierto  ", AHORA)
+    siniestro.rechazar("  El evento no está cubierto  ", AHORA, AGENTE)
 
     assert siniestro.estado is EstadoSiniestro.RECHAZADO
     assert siniestro.motivo_rechazo == "El evento no está cubierto"
@@ -131,9 +132,9 @@ def test_rechazar_guarda_el_motivo_que_ve_el_cliente():
 )
 def test_solo_se_decide_un_siniestro_en_estudio(estado):
     for accion in (
-        lambda s: s.pedir_evidencia("x", AHORA),
-        lambda s: s.pagar(PAGO, AHORA),
-        lambda s: s.rechazar("x", AHORA),
+        lambda s: s.pedir_evidencia("x", AHORA, AGENTE),
+        lambda s: s.pagar(PAGO, AHORA, AGENTE),
+        lambda s: s.rechazar("x", AHORA, AGENTE),
     ):
         siniestro = _siniestro(estado=estado)
         with pytest.raises(TransicionInvalida) as error:
@@ -170,7 +171,7 @@ async def repositorio(request, tmp_path):
 async def test_actualizar_guarda_lo_que_cambio_la_transicion(repositorio):
     siniestro = _siniestro()
     await repositorio.crear(siniestro)
-    siniestro.pedir_evidencia("Falta el recibo", AHORA)
+    siniestro.pedir_evidencia("Falta el recibo", AHORA, AGENTE)
 
     assert await repositorio.actualizar(siniestro, EstadoSiniestro.EN_ESTUDIO) is True
 
@@ -181,7 +182,7 @@ async def test_actualizar_guarda_el_pago_con_su_precision(repositorio):
     creado = _siniestro()
     await repositorio.crear(creado)
     siniestro = await repositorio.obtener(creado.id)
-    siniestro.pagar(PAGO, AHORA)
+    siniestro.pagar(PAGO, AHORA, AGENTE)
 
     assert await repositorio.actualizar(siniestro, EstadoSiniestro.EN_ESTUDIO) is True
 
@@ -196,8 +197,8 @@ async def test_actualizar_no_pisa_a_quien_llego_primero(repositorio):
     await repositorio.crear(siniestro)
     uno = await repositorio.obtener(siniestro.id)
     otro = await repositorio.obtener(siniestro.id)
-    uno.pedir_evidencia("lo pide uno", AHORA)
-    otro.rechazar("lo rechaza otro", AHORA)
+    uno.pedir_evidencia("lo pide uno", AHORA, AGENTE)
+    otro.rechazar("lo rechaza otro", AHORA, AGENTE)
 
     primero = await repositorio.actualizar(uno, EstadoSiniestro.EN_ESTUDIO)
     segundo = await repositorio.actualizar(otro, EstadoSiniestro.EN_ESTUDIO)
@@ -253,7 +254,7 @@ async def test_la_memoria_devuelve_copias():
     await repositorio.crear(siniestro)
 
     leido = await repositorio.obtener(siniestro.id)
-    leido.rechazar("solo en mi copia", AHORA)
+    leido.rechazar("solo en mi copia", AHORA, AGENTE)
 
     assert (await repositorio.obtener(siniestro.id)).estado is EstadoSiniestro.EN_ESTUDIO
     assert (
@@ -346,7 +347,7 @@ async def _en_falta_informacion():
     servicio, repositorio = _servicio_con(siniestro)
     await repositorio.crear(siniestro)
     pedido = await repositorio.obtener(siniestro.id)
-    pedido.pedir_evidencia("Falta el recibo", AHORA)
+    pedido.pedir_evidencia("Falta el recibo", AHORA, AGENTE)
     await repositorio.actualizar(pedido, EstadoSiniestro.EN_ESTUDIO)
     return servicio, repositorio, siniestro.id
 

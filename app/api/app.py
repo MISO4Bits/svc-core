@@ -27,6 +27,7 @@ from app.api.evidencias import router as evidencias_router
 from app.api.polizas import router as polizas_router
 from app.api.routes import router
 from app.api.siniestros import router as siniestros_router
+from app.api.siniestros_internos import router as siniestros_internos_router
 from app.api.usuarios_internos import router as usuarios_internos_router
 from app.config import Settings, get_settings
 from app.cuentas_internas import CuentasInternasService
@@ -67,11 +68,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repo_polizas, cotizaciones, documentos, cerrables_polizas = build_polizas(
         settings, repo_evidencias
     )
+    repo_dispositivos = build_dispositivos(settings)
+    avisos = build_avisos(settings, repo_dispositivos, events)
     siniestros, cerrables_siniestros = build_siniestros(
-        settings, clientes, repo_polizas, almacen, idempotency
+        settings, clientes, repo_polizas, almacen, idempotency, avisos
     )
     cerrables = [*cerrables, *cerrables_polizas, *cerrables_cuentas, *cerrables_siniestros]
-    repo_dispositivos = build_dispositivos(settings)
     polizas = PolizaService(
         clientes,
         repo_evidencias,
@@ -80,7 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         documentos,
         events,
         correos=notificaciones,
-        avisos=build_avisos(settings, repo_dispositivos, events),
+        avisos=avisos,
     )
     dispositivos = DispositivoService(clientes, repo_dispositivos)
     # Si el cliente cumple algo que le faltaba a su póliza pendiente, esta se vuelve a evaluar.
@@ -176,6 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(dispositivos_router, prefix="/v1")
     app.include_router(usuarios_internos_router, prefix="/v1")
     app.include_router(siniestros_router, prefix="/v1")
+    app.include_router(siniestros_internos_router, prefix="/v1")
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:
