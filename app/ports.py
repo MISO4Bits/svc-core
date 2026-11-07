@@ -10,6 +10,7 @@ from app.domain import (
     Consentimiento,
     ConsentimientoScope,
     CotizacionActiva,
+    CreditosReportados,
     CuentaInterna,
     Decision,
     Dispositivo,
@@ -24,8 +25,10 @@ from app.domain import (
     Poliza,
     ReferenciaDocumento,
     RolInterno,
+    Siniestro,
     TipoCorreo,
     TipoEvidencia,
+    TipoSiniestro,
     Veredicto,
     Vigencia,
 )
@@ -280,4 +283,28 @@ class DispositivoRepository(Protocol):
 class AvisosDePolizaPort(Protocol):
     async def avisar_poliza_emitida(self, poliza: Poliza) -> None:
         """Encarga el aviso push de póliza emitida a los dispositivos del cliente."""
+        ...
+
+
+@runtime_checkable
+class SiniestroRepository(Protocol):
+    async def crear(self, siniestro: Siniestro) -> None:
+        """Guarda el siniestro. Lanza ``SiniestroEnCurso`` si la póliza ya tiene uno de esa
+        cobertura en curso (carrera entre dos reportes) y ``NumeroSiniestroDuplicado`` si el
+        radicado ya existe."""
+        ...
+
+    async def obtener(self, siniestro_id: str) -> Siniestro | None: ...
+
+    async def en_curso(self, poliza_id: str, tipo: TipoSiniestro) -> Siniestro | None:
+        """El siniestro de esa póliza y cobertura que está ``EN_ESTUDIO`` o
+        ``FALTA_INFORMACION``, o ``None``."""
+        ...
+
+
+@runtime_checkable
+class CreditosPort(Protocol):
+    async def hipotecas(self, cliente_id: str) -> CreditosReportados:
+        """Hipotecas del cliente según svc-perfilamiento. Nunca lanza: si no responde, devuelve
+        ``estado = NO_DISPONIBLE``, porque el reporte de un siniestro no debe depender de esto."""
         ...

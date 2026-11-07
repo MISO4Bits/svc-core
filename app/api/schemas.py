@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
@@ -11,6 +11,7 @@ from pydantic.alias_generators import to_camel
 from app.domain import (
     PENDIENTES_DE_AGENTE,
     Canal,
+    ClaseArchivo,
     CodigoCobertura,
     CodigoPendiente,
     ConsentimientoScope,
@@ -19,6 +20,7 @@ from app.domain import (
     EstadoDocumentoPoliza,
     EstadoEvidencia,
     EstadoPoliza,
+    EstadoSiniestro,
     MotivoRechazo,
     OrigenDatos,
     PlataformaDispositivo,
@@ -27,6 +29,7 @@ from app.domain import (
     TipoDocumento,
     TipoEvidencia,
     TipoPendiente,
+    TipoSiniestro,
 )
 
 _EMAIL = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
@@ -306,3 +309,55 @@ class UsuarioInternoOut(_Model):
     uid: str
     correo: str
     rol: RolInterno
+
+
+# --- Siniestros (BITS-381) ---
+
+
+class ArchivoReporteIn(_Model):
+    """Datos de un archivo del reporte, en el mismo orden que las partes ``archivos``. La
+    ubicación viaja aquí y no en la foto, porque la app borra los metadatos al recomprimirla."""
+
+    clase: ClaseArchivo
+    capturado_en: AwareDatetime | None = None
+    latitud: float | None = Field(default=None, ge=-90, le=90)
+    longitud: float | None = Field(default=None, ge=-180, le=180)
+
+
+class OficinaIn(_Model):
+    id: str = Field(min_length=1, max_length=64)
+    banco: str = Field(min_length=1, max_length=100)
+    nombre: str = Field(min_length=1, max_length=100)
+    direccion: str = Field(min_length=1, max_length=200)
+
+
+class DestinoTransferenciaIn(_Model):
+    tipo: Literal["TRANSFERENCIA"]
+    banco: str = Field(min_length=1, max_length=100)
+    tipo_cuenta: Literal["AHORROS", "CORRIENTE"]
+    numero_cuenta: str = Field(pattern=r"^[0-9]{4,20}$")
+
+
+class DestinoChequeIn(_Model):
+    tipo: Literal["CHEQUE"]
+    oficina: OficinaIn
+
+
+DestinoPagoIn = Annotated[DestinoTransferenciaIn | DestinoChequeIn, Field(discriminator="tipo")]
+
+
+class ReportarSiniestroDatos(_Model):
+    """La parte ``datos`` (JSON) del reporte multipart."""
+
+    poliza_id: str = Field(min_length=1, max_length=64)
+    tipo: TipoSiniestro
+    fecha_ocurrencia: date
+    narracion: str | None = None
+    archivos: list[ArchivoReporteIn]
+    destino_pago: DestinoPagoIn | None = None
+
+
+class SiniestroReportadoOut(_Model):
+    id: str
+    numero: str
+    estado: EstadoSiniestro

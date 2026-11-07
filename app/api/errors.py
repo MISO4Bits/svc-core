@@ -13,6 +13,7 @@ from app.domain import (
     ClienteNoEncontrado,
     ClienteYaExiste,
     ConflictoPoliza,
+    ConflictoSiniestro,
     ConsentimientoNoEncontrado,
     CorreoInternoInvalido,
     CotizacionNoDisponible,
@@ -27,6 +28,7 @@ from app.domain import (
     PendienteNoAplica,
     PolizaNoEncontrada,
     SolicitudPolizaInvalida,
+    TipoNoCubierto,
 )
 from app.logging_utils import sanear_para_log
 
@@ -148,6 +150,26 @@ def install_error_handlers(app: FastAPI) -> None:
             detail=str(exc),
             instance=str(request.url),
             codigo=exc.codigo,
+        )
+
+    @app.exception_handler(ConflictoSiniestro)
+    async def _conflicto_siniestro(request: Request, exc: ConflictoSiniestro) -> JSONResponse:
+        return problema(
+            409,
+            "Conflicto con el siniestro",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo=exc.codigo,
+        )
+
+    @app.exception_handler(TipoNoCubierto)
+    async def _tipo_no_cubierto(request: Request, exc: TipoNoCubierto) -> JSONResponse:
+        return problema(
+            400,
+            "Tipo de siniestro no cubierto",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo="TIPO_NO_CUBIERTO",
         )
 
     @app.exception_handler(CotizacionNoDisponible)
