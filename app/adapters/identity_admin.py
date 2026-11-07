@@ -87,22 +87,37 @@ class IdentityPlatformAdmin:
     async def crear_cuenta(
         self, correo: str, contrasena: str, rol: RolInterno, nombre: str | None
     ) -> CuentaInterna:
-        cuerpo: dict = {
-            "email": correo,
-            "password": contrasena,
-            "emailVerified": True,
-            "customAttributes": json.dumps({"rol": str(rol)}),
-        }
+        cuerpo: dict = {"email": correo, "password": contrasena, "emailVerified": True}
         if nombre:
             cuerpo["displayName"] = nombre
         respuesta = await self._llamar("accounts", cuerpo)
-        if respuesta.status_code == 200:
-            return CuentaInterna(
-                uid=respuesta.json()["localId"], correo=correo, rol=rol, nombre=nombre
+        if respuesta.status_code != 200:
+            if _codigo_de_error(respuesta) == "EMAIL_EXISTS":
+                raise CuentaInternaYaExiste()
+            raise _fallo(respuesta)
+        uid = respuesta.json()["localId"]
+        # Crear ignora `customAttributes` sin avisar (probado contra Identity Platform real): el
+        # rol solo se guarda al actualizar. Sin él la cuenta no podría ingresar (403).
+        try:
+            fijado = await self._llamar(
+                "accounts:update",
+                {"localId": uid, "customAttributes": json.dumps({"rol": str(rol)})},
             )
-        if _codigo_de_error(respuesta) == "EMAIL_EXISTS":
-            raise CuentaInternaYaExiste()
-        raise _fallo(respuesta)
+            if fijado.status_code != 200:
+                raise _fallo(fijado)
+        except IdentidadNoDisponible:
+            # No se deja una cuenta sin rol: reintentar daría 409 y nadie podría usarla.
+            await self._borrar_sin_fallar(uid)
+            raise
+        return CuentaInterna(uid=uid, correo=correo, rol=rol, nombre=nombre)
+
+    async def _borrar_sin_fallar(self, uid: str) -> None:
+        try:
+            respuesta = await self._llamar("accounts:delete", {"localId": uid})
+        except IdentidadNoDisponible:
+            respuesta = None
+        if respuesta is None or respuesta.status_code != 200:
+            logger.error("no se pudo borrar la cuenta sin rol uid=%s", uid)
 
     async def buscar_por_correo(self, correo: str) -> CuentaInterna | None:
         respuesta = await self._llamar("accounts:lookup", {"email": [correo]})

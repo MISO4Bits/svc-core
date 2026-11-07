@@ -241,7 +241,8 @@ def _admin(handler) -> IdentityPlatformAdmin:
     return IdentityPlatformAdmin("solventa-dev", _token, client=cliente)
 
 
-async def test_crear_cuenta_pide_correo_verificado_rol_y_nombre():
+async def test_crear_cuenta_la_crea_verificada_y_luego_le_fija_el_rol():
+    """Identity Platform ignora `customAttributes` al crear: el rol se fija con un segundo paso."""
     pedidos: list[httpx.Request] = []
 
     def handler(request):
@@ -252,15 +253,15 @@ async def test_crear_cuenta_pide_correo_verificado_rol_y_nombre():
     cuenta = await admin.crear_cuenta("socio@solventa4bits.com", CLAVE, RolInterno.SOCIO, "Aliado")
 
     assert cuenta == CuentaInterna("uid-1", "socio@solventa4bits.com", RolInterno.SOCIO, "Aliado")
-    pedido = pedidos[0]
-    assert str(pedido.url) == (
-        "https://identitytoolkit.googleapis.com/v1/projects/solventa-dev/accounts"
-    )
-    assert pedido.headers["Authorization"] == "Bearer token-de-servicio"
-    cuerpo = json.loads(pedido.content)
-    assert cuerpo["emailVerified"] is True
-    assert cuerpo["displayName"] == "Aliado"
-    assert json.loads(cuerpo["customAttributes"]) == {"rol": "SOCIO"}
+    base = "https://identitytoolkit.googleapis.com/v1/projects/solventa-dev"
+    assert [str(p.url) for p in pedidos] == [f"{base}/accounts", f"{base}/accounts:update"]
+    assert all(p.headers["Authorization"] == "Bearer token-de-servicio" for p in pedidos)
+    creacion, fijar_rol = (json.loads(p.content) for p in pedidos)
+    assert creacion["emailVerified"] is True
+    assert creacion["displayName"] == "Aliado"
+    assert "customAttributes" not in creacion
+    assert fijar_rol["localId"] == "uid-1"
+    assert json.loads(fijar_rol["customAttributes"]) == {"rol": "SOCIO"}
     await admin.aclose()
 
 
@@ -274,6 +275,53 @@ async def test_crear_cuenta_sin_nombre_no_envia_displayname():
     await _admin(handler).crear_cuenta(ADMIN, CLAVE, RolInterno.ADMIN, None)
 
     assert "displayName" not in cuerpos[0]
+
+
+@pytest.mark.parametrize("fallo", ["estado", "red"])
+async def test_si_no_se_puede_fijar_el_rol_se_borra_la_cuenta(fallo):
+    """Una cuenta sin rol no puede ingresar y reintentar daría 409: se deshace."""
+    rutas: list[str] = []
+
+    def handler(request):
+        ruta = request.url.path.rsplit("/", 1)[-1]
+        rutas.append(ruta)
+        if ruta == "accounts:update":
+            if fallo == "red":
+                raise httpx.ConnectError("sin red")
+            return httpx.Response(500, json={"error": {"message": "INTERNAL"}})
+        return httpx.Response(200, json={"localId": "uid-3"})
+
+    with pytest.raises(IdentidadNoDisponible):
+        await _admin(handler).crear_cuenta(ADMIN, CLAVE, RolInterno.ADMIN, None)
+
+    assert rutas == ["accounts", "accounts:update", "accounts:delete"]
+
+
+async def test_si_tampoco_se_puede_borrar_la_cuenta_el_error_sigue_siendo_el_mismo(caplog):
+    def handler(request):
+        ruta = request.url.path.rsplit("/", 1)[-1]
+        if ruta == "accounts":
+            return httpx.Response(200, json={"localId": "uid-4"})
+        raise httpx.ConnectError("sin red")
+
+    with caplog.at_level(logging.ERROR), pytest.raises(IdentidadNoDisponible):
+        await _admin(handler).crear_cuenta(ADMIN, CLAVE, RolInterno.ADMIN, None)
+
+    assert "uid-4" in caplog.text
+    assert ADMIN not in caplog.text
+
+
+async def test_si_el_borrado_responde_error_tambien_se_registra(caplog):
+    def handler(request):
+        ruta = request.url.path.rsplit("/", 1)[-1]
+        if ruta == "accounts":
+            return httpx.Response(200, json={"localId": "uid-5"})
+        return httpx.Response(500, json={})
+
+    with caplog.at_level(logging.ERROR), pytest.raises(IdentidadNoDisponible):
+        await _admin(handler).crear_cuenta(ADMIN, CLAVE, RolInterno.ADMIN, None)
+
+    assert "uid-5" in caplog.text
 
 
 async def test_crear_cuenta_con_correo_existente_es_conflicto():
