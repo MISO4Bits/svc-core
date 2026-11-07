@@ -28,8 +28,10 @@ from app.domain import (
     CodigoPendiente,
     Consentimiento,
     ConsentimientoScope,
+    DanoHogar,
     DatosCredito,
     Decision,
+    DecisionSiniestro,
     Dispositivo,
     DocumentoAceptado,
     EstadoCliente,
@@ -57,6 +59,7 @@ from app.domain import (
     Siniestro,
     SiniestroEnCurso,
     TipoDecision,
+    TipoDecisionSiniestro,
     TipoDocumento,
     TipoEvidencia,
     TipoPendiente,
@@ -1119,7 +1122,8 @@ CREATE TABLE IF NOT EXISTS siniestros (
     motivo_rechazo TEXT,
     pago TEXT,
     automatico INTEGER NOT NULL DEFAULT 0,
-    evento TEXT
+    evento TEXT,
+    decisiones TEXT NOT NULL DEFAULT '[]'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_numero ON siniestros (numero);
 -- Un siniestro en curso por póliza y cobertura: la base lo garantiza aunque lleguen dos reportes
@@ -1136,12 +1140,13 @@ _MIGRACION_SINIESTROS = (
     "ALTER TABLE siniestros ADD COLUMN pago TEXT",
     "ALTER TABLE siniestros ADD COLUMN automatico INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE siniestros ADD COLUMN evento TEXT",
+    "ALTER TABLE siniestros ADD COLUMN decisiones TEXT NOT NULL DEFAULT '[]'",
 )
 
 _COLUMNAS_SINIESTRO = (
     "id, numero, cliente_id, poliza_id, tipo, estado, fecha_ocurrencia, narracion, archivos, "
     "saldo_credito, destino_pago, reportado_en, ultima_entrega_en, actualizado_en, "
-    "evidencia_pedida, motivo_rechazo, pago, automatico, evento"
+    "evidencia_pedida, motivo_rechazo, pago, automatico, evento, decisiones"
 )
 
 
@@ -1215,6 +1220,38 @@ def _json_a_evidencia_pedida(crudo: str | None) -> EvidenciaPedida | None:
     return EvidenciaPedida(d["detalle"], datetime.fromisoformat(d["pedidaEn"]))
 
 
+def _decisiones_a_json(decisiones: tuple[DecisionSiniestro, ...]) -> str:
+    return json.dumps(
+        [
+            {
+                "agente": d.agente,
+                "decision": str(d.decision),
+                "fecha": _utc(d.fecha),
+                "dano": str(d.dano) if d.dano else None,
+                "valor": str(d.valor) if d.valor is not None else None,
+                "detalle": d.detalle,
+                "motivo": d.motivo,
+            }
+            for d in decisiones
+        ]
+    )
+
+
+def _json_a_decisiones(crudo: str | None) -> tuple[DecisionSiniestro, ...]:
+    return tuple(
+        DecisionSiniestro(
+            agente=d["agente"],
+            decision=TipoDecisionSiniestro(d["decision"]),
+            fecha=datetime.fromisoformat(d["fecha"]),
+            dano=DanoHogar(d["dano"]) if d.get("dano") else None,
+            valor=Decimal(d["valor"]) if d.get("valor") is not None else None,
+            detalle=d.get("detalle"),
+            motivo=d.get("motivo"),
+        )
+        for d in json.loads(crudo or "[]")
+    )
+
+
 def _siniestro_a_fila(x: Siniestro) -> tuple:
     saldo = x.saldo_credito
     return (
@@ -1244,6 +1281,7 @@ def _siniestro_a_fila(x: Siniestro) -> tuple:
         _pago_a_json(x.pago),
         int(x.automatico),
         json.dumps(x.evento) if x.evento is not None else None,
+        _decisiones_a_json(x.decisiones),
     )
 
 
@@ -1274,6 +1312,7 @@ def _fila_a_siniestro(row: aiosqlite.Row) -> Siniestro:
         pago=_json_a_pago(row["pago"]),
         automatico=bool(row["automatico"]),
         evento=json.loads(row["evento"]) if row["evento"] else None,
+        decisiones=_json_a_decisiones(row["decisiones"]),
     )
 
 
@@ -1286,7 +1325,7 @@ class SqliteSiniestroRepository:
             try:
                 await conn.execute(
                     f"INSERT INTO siniestros ({_COLUMNAS_SINIESTRO}) "
-                    f"VALUES ({', '.join('?' * 19)})",
+                    f"VALUES ({', '.join('?' * 20)})",
                     _siniestro_a_fila(siniestro),
                 )
                 await conn.commit()
@@ -1326,6 +1365,26 @@ class SqliteSiniestroRepository:
             )
             return [_fila_a_siniestro(r) for r in await cursor.fetchall()]
 
+    async def listar(
+        self, estado: EstadoSiniestro | None, automatico: bool | None
+    ) -> list[Siniestro]:
+        condiciones: list[str] = []
+        parametros: list = []
+        if estado is not None:
+            condiciones.append("estado = ?")
+            parametros.append(str(estado))
+        if automatico is not None:
+            condiciones.append("automatico = ?")
+            parametros.append(int(automatico))
+        donde = f"WHERE {' AND '.join(condiciones)} " if condiciones else ""
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"SELECT {_COLUMNAS_SINIESTRO} FROM siniestros {donde}"
+                "ORDER BY reportado_en DESC, id",
+                parametros,
+            )
+            return [_fila_a_siniestro(r) for r in await cursor.fetchall()]
+
     async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
         """El estado se comprueba en la misma sentencia que lo cambia: dos acciones al mismo
         tiempo sobre el mismo siniestro dejan una sola."""
@@ -1333,7 +1392,8 @@ class SqliteSiniestroRepository:
         async with self._db.connect() as conn:
             cursor = await conn.execute(
                 "UPDATE siniestros SET estado = ?, archivos = ?, ultima_entrega_en = ?, "
-                "actualizado_en = ?, evidencia_pedida = ?, motivo_rechazo = ?, pago = ? "
+                "actualizado_en = ?, evidencia_pedida = ?, motivo_rechazo = ?, pago = ?, "
+                "decisiones = ? "
                 "WHERE id = ? AND estado = ?",
                 (
                     fila[5],
@@ -1343,6 +1403,7 @@ class SqliteSiniestroRepository:
                     fila[14],
                     fila[15],
                     fila[16],
+                    fila[19],
                     siniestro.id,
                     str(estado_anterior),
                 ),

@@ -306,6 +306,13 @@ class SiniestroRepository(Protocol):
         """Todos los del cliente, del más reciente al más antiguo."""
         ...
 
+    async def listar(
+        self, estado: EstadoSiniestro | None, automatico: bool | None
+    ) -> list[Siniestro]:
+        """Los de todos los clientes (la bandeja del ``ADMIN``), con los filtros que lleguen, del
+        más reciente al más antiguo. Quien llama los ordena por plazo."""
+        ...
+
     async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
         """Guarda lo que cambió una transición (estado, archivos, lo pedido, el motivo, el
         pago) solo si el siniestro sigue en ``estado_anterior``, en la misma operación. Devuelve

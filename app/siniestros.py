@@ -15,16 +15,23 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+from app.avisos import Aviso, AvisoService, ruta_seguro
 from app.domain import (
     MAX_ARCHIVOS_SINIESTRO,
+    ArchivoNoEncontrado,
     ArchivoSiniestro,
+    BeneficiarioPago,
     ClaseArchivo,
     ClienteNoEncontrado,
+    CodigoCobertura,
+    DanoHogar,
     EstadoPoliza,
     EstadoSiniestro,
     FueraDeVigencia,
+    LineaPago,
     NumeroSiniestroDuplicado,
     OrigenSaldo,
+    Pago,
     Poliza,
     PolizaNoEncontrada,
     SaldoCredito,
@@ -32,9 +39,11 @@ from app.domain import (
     SiniestroEnCurso,
     SiniestroNoEncontrado,
     SolicitudSiniestroInvalida,
+    TipoDecisionSiniestro,
     TipoNoCubierto,
     TipoSiniestro,
     TransicionInvalida,
+    ValorSuperaSumaAsegurada,
     generar_numero_siniestro,
     new_id,
     now_utc,
@@ -87,6 +96,22 @@ class ReporteSiniestro:
     destino_pago: dict | None = None
 
 
+@dataclass(frozen=True)
+class DecisionEntrada:
+    """Lo que el ``ADMIN`` decide sobre un siniestro. ``agente`` es el usuario de la sesión, que
+    llena el BFF: nunca lo escribe quien decide."""
+
+    decision: TipoDecisionSiniestro
+    agente: str
+    dano: DanoHogar | None = None
+    valor: Decimal | None = None
+    detalle: str | None = None
+    motivo: str | None = None
+
+
+MAX_TEXTO_DECISION = 2000
+
+
 def _normalizado(texto: str) -> str:
     """Sin tildes ni mayúsculas: el banco se escribe distinto según la fuente."""
     sin_tildes = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
@@ -108,7 +133,9 @@ class SiniestroService:
         ahora: Callable[[], datetime] = now_utc,
         hoy: Callable[[], date] = hoy_en_colombia,
         aleatorio: Callable[[str], str] = secrets.choice,
+        avisos: AvisoService | None = None,
     ) -> None:
+        self._avisos = avisos
         self._clientes = clientes
         self._polizas = polizas
         self._siniestros = siniestros
@@ -196,6 +223,162 @@ class SiniestroService:
         if await self._clientes.obtener(cliente_id) is None:
             raise ClienteNoEncontrado(cliente_id)
         return await self._siniestros.listar_de_cliente(cliente_id)
+
+    # --- bandeja del ADMIN (BITS-377) ---
+
+    async def bandeja(
+        self, estado: EstadoSiniestro | None, automatico: bool | None
+    ) -> list[Siniestro]:
+        """Los de todos los clientes, ordenados por plazo: primero los que corren (``EN_ESTUDIO``)
+        del que vence antes al que vence después y luego los demás, del más reciente al más
+        antiguo."""
+        siniestros = await self._siniestros.listar(estado, automatico)
+        con_plazo = sorted(
+            (s for s in siniestros if s.fecha_limite is not None),
+            key=lambda s: (s.fecha_limite, s.id),
+        )
+        return [*con_plazo, *(s for s in siniestros if s.fecha_limite is None)]
+
+    async def detalle_interno(self, siniestro_id: str) -> tuple[Siniestro, Poliza]:
+        siniestro = await self._siniestro_o_404(siniestro_id)
+        poliza = await self._polizas.obtener(siniestro.poliza_id)
+        if poliza is None:
+            raise PolizaNoEncontrada(siniestro.poliza_id)
+        return siniestro, poliza
+
+    async def archivo(self, siniestro_id: str, archivo_id: str) -> tuple[bytes, str]:
+        """El archivo de un siniestro y su tipo de contenido, para abrirlo en la bandeja."""
+        siniestro = await self._siniestro_o_404(siniestro_id)
+        archivo = next((a for a in siniestro.archivos if a.id == archivo_id), None)
+        if archivo is None:
+            raise ArchivoNoEncontrado(archivo_id)
+        return await self._almacen.obtener(archivo.referencia), archivo.content_type
+
+    async def decidir(self, siniestro_id: str, entrada: DecisionEntrada) -> Siniestro:
+        """Paga, pide más evidencia o rechaza un siniestro ``EN_ESTUDIO``.
+
+        Un siniestro ya ``PAGADO`` o ``RECHAZADO`` no cambia: se devuelve como quedó (pagar dos
+        veces deja una sola orden, la que existe). Uno en ``FALTA_INFORMACION`` ya salió de la
+        bandeja y responde 409. La condición sobre el estado se evalúa en la misma operación que
+        guarda, así que dos decisiones simultáneas dejan una sola.
+        """
+        siniestro = await self._siniestro_o_404(siniestro_id)
+        if siniestro.estado in (EstadoSiniestro.PAGADO, EstadoSiniestro.RECHAZADO):
+            return siniestro
+        if siniestro.estado is not EstadoSiniestro.EN_ESTUDIO:
+            raise TransicionInvalida(siniestro.estado)
+
+        ahora = self._ahora()
+        aviso = await self._aplicar(siniestro, entrada, ahora)
+        if not await self._siniestros.actualizar(siniestro, EstadoSiniestro.EN_ESTUDIO):
+            # Otra decisión llegó primero: se devuelve lo que quedó.
+            actual = await self._siniestro_o_404(siniestro_id)
+            if actual.estado in (EstadoSiniestro.PAGADO, EstadoSiniestro.RECHAZADO):
+                return actual
+            raise TransicionInvalida(actual.estado)
+        logger.info(
+            "decisión aplicada siniestro_id=%s decision=%s",
+            sanear_para_log(siniestro.id),
+            entrada.decision,
+        )
+        await self._avisar(siniestro, aviso)
+        return siniestro
+
+    async def _aplicar(
+        self, siniestro: Siniestro, entrada: DecisionEntrada, ahora: datetime
+    ) -> Aviso:
+        """Valida la decisión según su tipo y la aplica en el dominio. Devuelve el aviso."""
+        tipo = entrada.decision
+        sobrantes = {
+            "dano": entrada.dano,
+            "valor": entrada.valor,
+            "detalle": entrada.detalle,
+            "motivo": entrada.motivo,
+        }
+        propios = {
+            TipoDecisionSiniestro.PAGAR: {"dano", "valor"},
+            TipoDecisionSiniestro.PEDIR_EVIDENCIA: {"detalle"},
+            TipoDecisionSiniestro.RECHAZAR: {"motivo"},
+        }[tipo]
+        for campo, valor in sobrantes.items():
+            if valor is not None and campo not in propios:
+                raise SolicitudSiniestroInvalida(campo, f"No corresponde a la decisión {tipo}")
+
+        if tipo is TipoDecisionSiniestro.PEDIR_EVIDENCIA:
+            detalle = _texto_obligatorio("detalle", entrada.detalle, "Escribe qué falta")
+            siniestro.pedir_evidencia(detalle, ahora, entrada.agente)
+            return Aviso.SINIESTRO_FALTA_INFORMACION
+        if tipo is TipoDecisionSiniestro.RECHAZAR:
+            motivo = _texto_obligatorio("motivo", entrada.motivo, "Escribe el motivo")
+            siniestro.rechazar(motivo, ahora, entrada.agente)
+            return Aviso.SINIESTRO_RECHAZADO
+        pago = await self._orden_de_pago(siniestro, entrada, ahora)
+        siniestro.pagar(pago, ahora, entrada.agente, dano=entrada.dano, valor=entrada.valor)
+        return Aviso.SINIESTRO_PAGADO
+
+    async def _orden_de_pago(
+        self, siniestro: Siniestro, entrada: DecisionEntrada, ahora: datetime
+    ) -> Pago:
+        """Una sola orden por siniestro, con una o dos líneas. El saldo es el guardado al
+        reportar, no el de hoy."""
+        saldo = siniestro.saldo_credito
+        al_banco = f"{saldo.entidad}, abono al saldo del crédito"
+        if siniestro.tipo is TipoSiniestro.INCAPACIDAD_TOTAL:
+            if entrada.dano is not None or entrada.valor is not None:
+                raise SolicitudSiniestroInvalida(
+                    "valor", "La incapacidad total se paga al banco por el saldo: no lleva valor"
+                )
+            return Pago(ahora, (LineaPago(BeneficiarioPago.BANCO, saldo.valor, al_banco),))
+
+        if entrada.dano is None:
+            raise SolicitudSiniestroInvalida(
+                "dano", "Indica si el daño es reparable o pérdida total"
+            )
+        if entrada.valor is None or entrada.valor <= 0:
+            raise SolicitudSiniestroInvalida("valor", "Escribe el valor a pagar")
+        poliza = await self._polizas.obtener(siniestro.poliza_id)
+        if poliza is None:
+            raise PolizaNoEncontrada(siniestro.poliza_id)
+        suma = next(
+            (c.suma_asegurada for c in poliza.coberturas if c.codigo is CodigoCobertura.HOGAR), None
+        )
+        if suma is None:
+            raise TipoNoCubierto(siniestro.tipo)
+        if entrada.valor > suma:
+            raise ValorSuperaSumaAsegurada(suma)
+
+        al_cliente = _destino_del_cliente(siniestro.destino_pago)
+        if entrada.dano is DanoHogar.REPARABLE:
+            return Pago(ahora, (LineaPago(BeneficiarioPago.CLIENTE, entrada.valor, al_cliente),))
+        # Pérdida total: el banco cobra primero hasta el saldo y el resto es del cliente. Si el
+        # valor no supera el saldo, todo va al banco y no hay línea para el cliente.
+        para_banco = min(entrada.valor, saldo.valor)
+        lineas = [LineaPago(BeneficiarioPago.BANCO, para_banco, al_banco)]
+        if entrada.valor > para_banco:
+            lineas.append(
+                LineaPago(BeneficiarioPago.CLIENTE, entrada.valor - para_banco, al_cliente)
+            )
+        return Pago(ahora, tuple(lineas))
+
+    async def _avisar(self, siniestro: Siniestro, aviso: Aviso) -> None:
+        """Un fallo del aviso se registra y no afecta la decisión, que ya quedó guardada."""
+        if self._avisos is None:
+            return
+        try:
+            await self._avisos.avisar(siniestro.cliente_id, aviso, ruta_seguro(siniestro.poliza_id))
+        except Exception as exc:
+            logger.warning(
+                "no se pudo avisar siniestro_id=%s aviso=%s (%s)",
+                sanear_para_log(siniestro.id),
+                aviso,
+                type(exc).__name__,
+            )
+
+    async def _siniestro_o_404(self, siniestro_id: str) -> Siniestro:
+        siniestro = await self._siniestros.obtener(siniestro_id)
+        if siniestro is None:
+            raise SiniestroNoEncontrado(siniestro_id)
+        return siniestro
 
     # --- lo que falta ---
 
@@ -362,3 +545,24 @@ class SiniestroService:
                 continue
             return siniestro
         raise RuntimeError("no se pudo generar un radicado de siniestro único")
+
+
+def _texto_obligatorio(campo: str, valor: str | None, mensaje: str) -> str:
+    texto = (valor or "").strip()
+    if not texto:
+        raise SolicitudSiniestroInvalida(campo, mensaje)
+    if len(texto) > MAX_TEXTO_DECISION:
+        raise SolicitudSiniestroInvalida(campo, "El texto es demasiado largo")
+    return texto
+
+
+def _destino_del_cliente(destino: dict | None) -> str:
+    """El destino como texto listo para mostrar. Del número de cuenta solo salen los últimos
+    cuatro dígitos."""
+    if destino is None:
+        return "Sin destino registrado"
+    if destino.get("tipo") == "CHEQUE":
+        oficina = destino["oficina"]
+        return f"Cheque en {oficina['banco']}, {oficina['nombre']} ({oficina['direccion']})"
+    clase = "ahorros" if destino.get("tipoCuenta") == "AHORROS" else "corriente"
+    return f"Cuenta de {clase} terminada en {str(destino['numeroCuenta'])[-4:]}"
