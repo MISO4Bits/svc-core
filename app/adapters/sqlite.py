@@ -18,6 +18,7 @@ import aiosqlite
 from app.domain import (
     ESTADOS_EN_CURSO,
     ArchivoSiniestro,
+    BeneficiarioPago,
     Canal,
     ClaseArchivo,
     Cliente,
@@ -38,13 +39,16 @@ from app.domain import (
     EstadoSiniestro,
     Evidencia,
     EvidenciaDePoliza,
+    EvidenciaPedida,
     FiltroPolizas,
+    LineaPago,
     MotivoRechazoPoliza,
     NumeroPolizaDuplicado,
     NumeroSiniestroDuplicado,
     OrigenDatos,
     OrigenSaldo,
     PaginaPolizas,
+    Pago,
     Pendiente,
     PlataformaDispositivo,
     Poliza,
@@ -160,6 +164,7 @@ class SqliteDatabase:
                 # BITS-235: puntajes de la selfie, en bases de dev anteriores.
                 "ALTER TABLE evidencias ADD COLUMN puntaje_vida REAL",
                 "ALTER TABLE evidencias ADD COLUMN puntaje_coincidencia REAL",
+                *_MIGRACION_SINIESTROS,
             ):
                 try:
                     await conn.execute(ddl)
@@ -1092,7 +1097,7 @@ class SqliteDispositivoRepository:
         return [_row_to_dispositivo(f) for f in filas]
 
 
-# --- Siniestros (BITS-381) ---
+# --- Siniestros (BITS-381, BITS-383) ---
 
 _ESQUEMA_SINIESTROS = """
 CREATE TABLE IF NOT EXISTS siniestros (
@@ -1109,7 +1114,12 @@ CREATE TABLE IF NOT EXISTS siniestros (
     destino_pago TEXT,
     reportado_en TEXT NOT NULL,
     ultima_entrega_en TEXT NOT NULL,
-    actualizado_en TEXT NOT NULL
+    actualizado_en TEXT NOT NULL,
+    evidencia_pedida TEXT,
+    motivo_rechazo TEXT,
+    pago TEXT,
+    automatico INTEGER NOT NULL DEFAULT 0,
+    evento TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_numero ON siniestros (numero);
 -- Un siniestro en curso por póliza y cobertura: la base lo garantiza aunque lleguen dos reportes
@@ -1119,9 +1129,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_en_curso ON siniestros (poliza_
 CREATE INDEX IF NOT EXISTS idx_siniestros_cliente ON siniestros (cliente_id, reportado_en);
 """
 
+# Columnas que BITS-383 agregó a la tabla: se migran las bases de dev creadas antes.
+_MIGRACION_SINIESTROS = (
+    "ALTER TABLE siniestros ADD COLUMN evidencia_pedida TEXT",
+    "ALTER TABLE siniestros ADD COLUMN motivo_rechazo TEXT",
+    "ALTER TABLE siniestros ADD COLUMN pago TEXT",
+    "ALTER TABLE siniestros ADD COLUMN automatico INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE siniestros ADD COLUMN evento TEXT",
+)
+
 _COLUMNAS_SINIESTRO = (
     "id, numero, cliente_id, poliza_id, tipo, estado, fecha_ocurrencia, narracion, archivos, "
-    "saldo_credito, destino_pago, reportado_en, ultima_entrega_en, actualizado_en"
+    "saldo_credito, destino_pago, reportado_en, ultima_entrega_en, actualizado_en, "
+    "evidencia_pedida, motivo_rechazo, pago, automatico, evento"
 )
 
 
@@ -1151,6 +1171,50 @@ def _dict_a_archivo(d: dict) -> ArchivoSiniestro:
     )
 
 
+def _pago_a_json(pago: Pago | None) -> str | None:
+    if pago is None:
+        return None
+    return json.dumps(
+        {
+            "pagadoEn": _utc(pago.pagado_en),
+            "lineas": [
+                {
+                    "beneficiario": str(linea.beneficiario),
+                    "valor": str(linea.valor),
+                    "destino": linea.destino,
+                }
+                for linea in pago.lineas
+            ],
+        }
+    )
+
+
+def _json_a_pago(crudo: str | None) -> Pago | None:
+    if not crudo:
+        return None
+    d = json.loads(crudo)
+    return Pago(
+        pagado_en=datetime.fromisoformat(d["pagadoEn"]),
+        lineas=tuple(
+            LineaPago(BeneficiarioPago(x["beneficiario"]), Decimal(x["valor"]), x["destino"])
+            for x in d["lineas"]
+        ),
+    )
+
+
+def _evidencia_pedida_a_json(pedida: EvidenciaPedida | None) -> str | None:
+    if pedida is None:
+        return None
+    return json.dumps({"detalle": pedida.detalle, "pedidaEn": _utc(pedida.pedida_en)})
+
+
+def _json_a_evidencia_pedida(crudo: str | None) -> EvidenciaPedida | None:
+    if not crudo:
+        return None
+    d = json.loads(crudo)
+    return EvidenciaPedida(d["detalle"], datetime.fromisoformat(d["pedidaEn"]))
+
+
 def _siniestro_a_fila(x: Siniestro) -> tuple:
     saldo = x.saldo_credito
     return (
@@ -1175,6 +1239,11 @@ def _siniestro_a_fila(x: Siniestro) -> tuple:
         _utc(x.reportado_en),
         _utc(x.ultima_entrega_en),
         _utc(x.actualizado_en),
+        _evidencia_pedida_a_json(x.evidencia_pedida),
+        x.motivo_rechazo,
+        _pago_a_json(x.pago),
+        int(x.automatico),
+        json.dumps(x.evento) if x.evento is not None else None,
     )
 
 
@@ -1200,6 +1269,11 @@ def _fila_a_siniestro(row: aiosqlite.Row) -> Siniestro:
         reportado_en=datetime.fromisoformat(row["reportado_en"]),
         ultima_entrega_en=datetime.fromisoformat(row["ultima_entrega_en"]),
         actualizado_en=datetime.fromisoformat(row["actualizado_en"]),
+        evidencia_pedida=_json_a_evidencia_pedida(row["evidencia_pedida"]),
+        motivo_rechazo=row["motivo_rechazo"],
+        pago=_json_a_pago(row["pago"]),
+        automatico=bool(row["automatico"]),
+        evento=json.loads(row["evento"]) if row["evento"] else None,
     )
 
 
@@ -1212,7 +1286,7 @@ class SqliteSiniestroRepository:
             try:
                 await conn.execute(
                     f"INSERT INTO siniestros ({_COLUMNAS_SINIESTRO}) "
-                    f"VALUES ({', '.join('?' * 14)})",
+                    f"VALUES ({', '.join('?' * 19)})",
                     _siniestro_a_fila(siniestro),
                 )
                 await conn.commit()
@@ -1242,3 +1316,36 @@ class SqliteSiniestroRepository:
             )
             row = await cursor.fetchone()
         return _fila_a_siniestro(row) if row else None
+
+    async def listar_de_cliente(self, cliente_id: str) -> list[Siniestro]:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"SELECT {_COLUMNAS_SINIESTRO} FROM siniestros WHERE cliente_id = ? "
+                "ORDER BY reportado_en DESC, id",
+                (cliente_id,),
+            )
+            return [_fila_a_siniestro(r) for r in await cursor.fetchall()]
+
+    async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
+        """El estado se comprueba en la misma sentencia que lo cambia: dos acciones al mismo
+        tiempo sobre el mismo siniestro dejan una sola."""
+        fila = _siniestro_a_fila(siniestro)
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "UPDATE siniestros SET estado = ?, archivos = ?, ultima_entrega_en = ?, "
+                "actualizado_en = ?, evidencia_pedida = ?, motivo_rechazo = ?, pago = ? "
+                "WHERE id = ? AND estado = ?",
+                (
+                    fila[5],
+                    fila[8],
+                    fila[12],
+                    fila[13],
+                    fila[14],
+                    fila[15],
+                    fila[16],
+                    siniestro.id,
+                    str(estado_anterior),
+                ),
+            )
+            await conn.commit()
+        return cursor.rowcount > 0

@@ -27,6 +27,7 @@ from app.domain import (
     NombreSocioObligatorio,
     PendienteNoAplica,
     PolizaNoEncontrada,
+    SiniestroNoEncontrado,
     SolicitudPolizaInvalida,
     TipoNoCubierto,
 )
@@ -151,6 +152,12 @@ def install_error_handlers(app: FastAPI) -> None:
             instance=str(request.url),
             codigo=exc.codigo,
         )
+
+    @app.exception_handler(SiniestroNoEncontrado)
+    async def _siniestro_no_encontrado(
+        request: Request, exc: SiniestroNoEncontrado
+    ) -> JSONResponse:
+        return problema(404, "Siniestro no encontrado", detail=str(exc), instance=str(request.url))
 
     @app.exception_handler(ConflictoSiniestro)
     async def _conflicto_siniestro(request: Request, exc: ConflictoSiniestro) -> JSONResponse:

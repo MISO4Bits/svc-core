@@ -803,6 +803,109 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problema' }
+    get:
+      operationId: listarSiniestrosDelCliente
+      tags: [Siniestros]
+      summary: Lista los siniestros del cliente
+      description: |
+        Del más reciente al más antiguo, sin paginar. Incluye los de pago automático por sismo
+        (`automatico: true`). El detalle de cada uno está en `/siniestros/{siniestroId}`.
+      responses:
+        '200':
+          description: Siniestros del cliente (vacía si no tiene).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SiniestroResumen' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /v1/clientes/{clienteId}/siniestros/{siniestroId}:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+      - $ref: '#/components/parameters/SiniestroId'
+    get:
+      operationId: obtenerSiniestroDelCliente
+      tags: [Siniestros]
+      summary: Detalle de un siniestro del cliente
+      description: |
+        Estado, plazo y lo que el cliente necesita saber: lo que Solventa pidió
+        (`evidenciaPedida`), el motivo del rechazo, la orden de pago y los archivos con la fecha de
+        cada entrega. En el paramétrico trae también `automatico` y `evento`.
+
+        `fechaLimite` (la última entrega más un mes, art. 1080) solo existe en `EN_ESTUDIO`: en
+        `FALTA_INFORMACION` el reloj se detiene. **No devuelve el saldo del crédito ni el destino
+        del pago**: ahí está el número de cuenta.
+
+        Un siniestro de otro cliente responde `404`, igual que uno que no existe.
+      responses:
+        '200':
+          description: El siniestro.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Siniestro' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /v1/clientes/{clienteId}/siniestros/{siniestroId}/evidencias:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+      - $ref: '#/components/parameters/SiniestroId'
+    post:
+      operationId: entregarEvidenciasDelSiniestro
+      tags: [Siniestros]
+      summary: Envía lo que Solventa pidió
+      description: |
+        Solo con el siniestro en `FALTA_INFORMACION`. Es `multipart/form-data`, igual que el
+        reporte: la parte `datos` (JSON) lleva, por cada archivo, su clase y su ubicación, y las
+        partes `archivos` son las imágenes, en el mismo orden.
+
+        El siniestro vuelve a `EN_ESTUDIO`, el plazo corre de nuevo desde esta entrega y cada
+        archivo queda con su fecha (`entregadoEn`). No envía push: la bandeja es el aviso del
+        `ADMIN`. Responde el detalle actualizado.
+
+        Idempotente con `Idempotency-Key`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 64 }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [datos, archivos]
+              properties:
+                datos: { $ref: '#/components/schemas/EntregarEvidenciasDatos' }
+                archivos:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items: { type: string, format: binary }
+            encoding:
+              datos: { contentType: application/json }
+              archivos: { contentType: 'image/jpeg, image/png' }
+      responses:
+        '201':
+          description: Evidencia recibida; el siniestro volvió a `EN_ESTUDIO`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Siniestro' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: |
+            `ESTADO_NO_PERMITE`: el siniestro no está en `FALTA_INFORMACION` (no se pidió nada, o
+            otra entrega llegó primero).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemaSiniestro' }
+        '413':
+          description: Una imagen supera el tamaño máximo.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
 
 components:
 
@@ -835,6 +938,13 @@ components:
 
     PolizaId:
       name: polizaId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SiniestroId:
+      name: siniestroId
       in: path
       required: true
       schema:
@@ -1720,10 +1830,12 @@ components:
 
     TipoSiniestro:
       type: string
-      enum: [INCAPACIDAD_TOTAL, INCENDIO_TERREMOTO]
+      enum: [INCAPACIDAD_TOTAL, INCENDIO_TERREMOTO, SISMO_PARAMETRICO]
       description: |
         `INCAPACIDAD_TOTAL` es de la cobertura Vida (se paga al banco, sin destino) e
         `INCENDIO_TERREMOTO` de Tu casa (`HOGAR`, con destino del pago y narración).
+        `SISMO_PARAMETRICO` lo crea el pago automático por sismo (Tu casa): el cliente no lo
+        reporta, así que `ReportarSiniestroDatos.tipo` no lo admite.
 
     EstadoSiniestro:
       type: string
@@ -1779,7 +1891,10 @@ components:
       required: [polizaId, tipo, fechaOcurrencia, archivos]
       properties:
         polizaId: { type: string, minLength: 1, maxLength: 64 }
-        tipo: { $ref: '#/components/schemas/TipoSiniestro' }
+        tipo:
+          type: string
+          enum: [INCAPACIDAD_TOTAL, INCENDIO_TERREMOTO]
+          description: 'El paramétrico (`SISMO_PARAMETRICO`) lo crea Solventa: no se reporta.'
         fechaOcurrencia: { type: string, format: date }
         narracion:
           type: string
@@ -1811,4 +1926,136 @@ components:
         properties:
           codigo:
             type: string
-            enum: [FUERA_DE_VIGENCIA, SINIESTRO_EN_CURSO, TIPO_NO_CUBIERTO]
+            enum: [FUERA_DE_VIGENCIA, SINIESTRO_EN_CURSO, TIPO_NO_CUBIERTO, ESTADO_NO_PERMITE]
+
+    EntregarEvidenciasDatos:
+      type: object
+      additionalProperties: false
+      required: [archivos]
+      properties:
+        archivos:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: '#/components/schemas/ArchivoReporte' }
+
+    ArchivoSiniestro:
+      type: object
+      additionalProperties: false
+      required: [id, clase, entregadoEn]
+      description: Un archivo del siniestro, sin su referencia interna en el bucket.
+      properties:
+        id: { type: string, format: uuid }
+        clase: { type: string, enum: [FOTO, DOCUMENTO] }
+        capturadoEn: { type: [string, 'null'], format: date-time }
+        latitud: { type: [number, 'null'] }
+        longitud: { type: [number, 'null'] }
+        entregadoEn:
+          type: string
+          format: date-time
+          description: La fecha de la entrega en que llegó (reporte o lo que se pidió después).
+
+    EvidenciaPedida:
+      type: object
+      additionalProperties: false
+      required: [detalle, pedidaEn]
+      properties:
+        detalle: { type: string, description: 'Lo que escribió el ADMIN, tal cual lo ve el cliente.' }
+        pedidaEn: { type: string, format: date-time }
+
+    LineaPago:
+      type: object
+      additionalProperties: false
+      required: [beneficiario, valor, destino]
+      properties:
+        beneficiario: { type: string, enum: [BANCO, CLIENTE] }
+        valor: { type: number }
+        destino:
+          type: string
+          description: Texto listo para mostrar, p. ej. «Cuenta de ahorros terminada en 4821».
+
+    Pago:
+      type: object
+      additionalProperties: false
+      required: [pagadoEn, lineas]
+      description: La orden de pago simulada, una por siniestro, con una o dos líneas.
+      properties:
+        pagadoEn: { type: string, format: date-time }
+        lineas:
+          type: array
+          items: { $ref: '#/components/schemas/LineaPago' }
+
+    EventoSismo:
+      type: object
+      additionalProperties: false
+      required: [fecha, municipio, magnitud]
+      properties:
+        fecha: { type: string, format: date }
+        municipio: { type: string }
+        magnitud: { type: number }
+
+    SiniestroResumen:
+      type: object
+      additionalProperties: false
+      required: [id, numero, polizaId, tipo, automatico, estado, reportadoEn, actualizadoEn]
+      examples:
+        - id: 3f2b8c1e-7d4a-4e5b-9a61-2c8d5f0b7e14
+          numero: SIN-2026-7K3M9Q
+          polizaId: 7c1f6a4e-2b8d-4d3a-9a55-0e3b1f2c8d10
+          tipo: INCENDIO_TERREMOTO
+          automatico: false
+          estado: EN_ESTUDIO
+          reportadoEn: '2026-11-10T15:02:00Z'
+          actualizadoEn: '2026-11-10T15:02:00Z'
+      properties:
+        id: { type: string, format: uuid }
+        numero: { type: string }
+        polizaId: { type: string }
+        tipo: { $ref: '#/components/schemas/TipoSiniestro' }
+        automatico: { type: boolean, description: '`true` en el pago automático por sismo.' }
+        estado: { $ref: '#/components/schemas/EstadoSiniestro' }
+        reportadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+
+    Siniestro:
+      type: object
+      additionalProperties: false
+      required:
+        [id, numero, polizaId, tipo, automatico, estado, reportadoEn, actualizadoEn,
+         fechaOcurrencia, ultimaEntregaEn, archivos]
+      description: |
+        El detalle de un siniestro para el cliente. Tiene los campos del resumen más el plazo, lo que
+        Solventa pidió, el motivo del rechazo, la orden de pago y los archivos.
+      properties:
+        id: { type: string, format: uuid }
+        numero: { type: string }
+        polizaId: { type: string }
+        tipo: { $ref: '#/components/schemas/TipoSiniestro' }
+        automatico: { type: boolean, description: '`true` en el pago automático por sismo.' }
+        estado: { $ref: '#/components/schemas/EstadoSiniestro' }
+        reportadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+        fechaOcurrencia: { type: string, format: date }
+        narracion: { type: [string, 'null'] }
+        ultimaEntregaEn: { type: string, format: date-time }
+        fechaLimite:
+          type: [string, 'null']
+          format: date-time
+          description: 'Solo en `EN_ESTUDIO`: la última entrega más un mes (art. 1080).'
+        evidenciaPedida:
+          oneOf:
+            - { $ref: '#/components/schemas/EvidenciaPedida' }
+            - { type: 'null' }
+        motivoRechazo: { type: [string, 'null'] }
+        pago:
+          oneOf:
+            - { $ref: '#/components/schemas/Pago' }
+            - { type: 'null' }
+        archivos:
+          type: array
+          items: { $ref: '#/components/schemas/ArchivoSiniestro' }
+        evento:
+          oneOf:
+            - { $ref: '#/components/schemas/EventoSismo' }
+            - { type: 'null' }
+          description: Solo en el paramétrico.

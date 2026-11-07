@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.domain import (
@@ -14,6 +15,7 @@ from app.domain import (
     Dispositivo,
     DomainEvent,
     EstadoPoliza,
+    EstadoSiniestro,
     Evidencia,
     EvidenciaDePoliza,
     FiltroPolizas,
@@ -366,6 +368,9 @@ class InMemoryDispositivoRepository:
 
 
 class InMemorySiniestroRepository:
+    """Guarda y devuelve copias, como una base de datos: cambiar lo que devolvió ``obtener`` no
+    cambia lo guardado hasta que se llama ``actualizar``."""
+
     def __init__(self) -> None:
         self._items: dict[str, Siniestro] = {}
 
@@ -374,15 +379,29 @@ class InMemorySiniestroRepository:
             raise NumeroSiniestroDuplicado()
         if await self.en_curso(siniestro.poliza_id, siniestro.tipo) is not None:
             raise SiniestroEnCurso()
-        self._items[siniestro.id] = siniestro
+        self._items[siniestro.id] = replace(siniestro)
 
     async def obtener(self, siniestro_id: str) -> Siniestro | None:
-        return self._items.get(siniestro_id)
+        guardado = self._items.get(siniestro_id)
+        return replace(guardado) if guardado else None
+
+    async def listar_de_cliente(self, cliente_id: str) -> list[Siniestro]:
+        propios = [x for x in self._items.values() if x.cliente_id == cliente_id]
+        return [
+            replace(x) for x in sorted(propios, key=lambda x: (-x.reportado_en.timestamp(), x.id))
+        ]
+
+    async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
+        actual = self._items.get(siniestro.id)
+        if actual is None or actual.estado is not estado_anterior:
+            return False
+        self._items[siniestro.id] = replace(siniestro)
+        return True
 
     async def en_curso(self, poliza_id: str, tipo: TipoSiniestro) -> Siniestro | None:
         return next(
             (
-                x
+                replace(x)
                 for x in self._items.values()
                 if x.poliza_id == poliza_id and x.tipo == tipo and x.estado in ESTADOS_EN_CURSO
             ),
