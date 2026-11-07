@@ -77,6 +77,34 @@ class CotizacionHttp:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def precio(self, edad: int, datos: DatosCredito) -> CotizacionActiva:
+        """``POST /v1/cotizaciones/precio``: no guarda nada en Cotización. Core ya validó la
+        solicitud, así que un ``4xx`` es un desacuerdo entre servicios, no un error del socio."""
+        cuerpo = {
+            "edad": edad,
+            "datosCredito": {
+                "valorCredito": float(datos.valor_credito),
+                "plazoRestanteMeses": datos.plazo_restante_meses,
+                "entidadAcreedora": datos.entidad_acreedora,
+                "saldoInsoluto": float(datos.saldo_insoluto),
+            },
+        }
+        for intento in range(_REINTENTOS + 1):
+            try:
+                respuesta = await self._client.post("/v1/cotizaciones/precio", json=cuerpo)
+            except httpx.TransportError:
+                logger.warning("precio: Cotización no respondió")
+            else:
+                if respuesta.status_code == 200:
+                    return cotizacion_desde_dict(respuesta.json())
+                if respuesta.status_code < 500:
+                    logger.error("precio: Cotización respondió %s", respuesta.status_code)
+                    raise CotizacionNoDisponible()
+                logger.warning("precio: Cotización respondió %s", respuesta.status_code)
+            if intento < _REINTENTOS:
+                await asyncio.sleep(0.1)
+        raise CotizacionNoDisponible()
+
     async def activa(self, cliente_id: str) -> CotizacionActiva | None:
         ruta = f"/v1/clientes/{cliente_id}/cotizacion-activa"
         for intento in range(_REINTENTOS + 1):

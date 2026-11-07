@@ -252,8 +252,17 @@ class DecisionOut(_Model):
     decidida_en: datetime
 
 
+class DatosVentaOut(_Model):
+    direccion: str
+    municipio: str
+    cuota_mensual: float
+
+
 class PolizaInternaOut(PolizaOut):
     cliente_id: str
+    # Solo las pólizas que vendió un socio (BITS-378).
+    socio_id: str | None = None
+    datos_venta: DatosVentaOut | None = None
     ultima_evaluacion_en: datetime | None
     tasa: float
     version_tarifa: int
@@ -487,3 +496,58 @@ class SiniestroInternoOut(SiniestroOut):
     saldo_credito: SaldoCreditoOut
     destino_pago: dict | None = None
     decisiones: list[DecisionSiniestroOut]
+
+
+# --- Venta directa del socio (BITS-378) ---
+
+
+class CrearClienteAsistidoRequest(_Model):
+    tipo_documento: TipoDocumento
+    numero_documento: str = Field(min_length=4, max_length=20, pattern=_DOCUMENTO)
+    primer_nombre: str = Field(min_length=1, max_length=60)
+    segundo_nombre: str | None = Field(default=None, max_length=60)
+    primer_apellido: str = Field(min_length=1, max_length=60)
+    segundo_apellido: str | None = Field(default=None, max_length=60)
+    fecha_nacimiento: date
+    email: str = Field(max_length=254, pattern=_EMAIL)
+    telefono: str = Field(pattern=_TELEFONO)
+
+
+class _CreditoNuevoRequest(_Model):
+    """El crédito que el banco aprobó: el saldo es el valor, porque todavía no se ha pagado."""
+
+    cliente_id: str = Field(min_length=1, max_length=64)
+    valor_credito: float = Field(gt=0, le=1e12)
+    plazo_restante_meses: int = Field(ge=1, le=480)
+    entidad_acreedora: str = Field(min_length=1, max_length=80)
+
+
+class PrecioPolizaRequest(_CreditoNuevoRequest):
+    pass
+
+
+class VenderPolizaRequest(_CreditoNuevoRequest):
+    socio_id: str = Field(min_length=1, max_length=128)
+    coberturas: list[CodigoCobertura] = Field(min_length=1, max_length=len(CodigoCobertura))
+    cuota_mensual: float = Field(gt=0, le=1e12)
+    direccion: str = Field(min_length=1, max_length=200)
+    municipio: str = Field(min_length=1, max_length=200)
+
+    @field_validator("coberturas")
+    @classmethod
+    def _sin_repetidas(cls, valor: list[CodigoCobertura]) -> list[CodigoCobertura]:
+        if len(set(valor)) != len(valor):
+            raise ValueError("las coberturas no pueden repetirse")
+        return valor
+
+
+class PrecioPolizaOut(_Model):
+    edad: int
+    datos_credito: DatosCreditoOut
+    origen_datos: OrigenDatos
+    tasa: float
+    version_tarifa: int
+    cobertura_meses: int
+    coberturas: list[CoberturaContratadaOut]
+    vigencia_cotizacion: VigenciaOut
+    creada_en: datetime

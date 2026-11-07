@@ -184,6 +184,8 @@ class TipoCorreo(StrEnum):
     BIENVENIDA = "bienvenida"
     VERIFICACION_CORREO = "verificacion-correo"
     POLIZA_EMITIDA = "poliza-emitida"
+    BIENVENIDA_VENTA = "bienvenida-venta"
+    CUENTA_ACTIVADA = "cuenta-activada"
 
 
 @dataclass(frozen=True)
@@ -416,6 +418,16 @@ class CotizacionActiva:
     creada_en: datetime
 
 
+@dataclass(frozen=True)
+class DatosVenta:
+    """Lo que el socio capturó al vender (BITS-378): dónde está el inmueble y la cuota del
+    crédito. Solo existe en las pólizas de venta directa."""
+
+    direccion: str
+    municipio: str
+    cuota_mensual: Decimal
+
+
 @dataclass
 class Poliza:
     """La solicitud de póliza y, cuando se emite, la póliza. Las cifras son la foto de la
@@ -446,6 +458,9 @@ class Poliza:
     rechazada_en: datetime | None = None
     # Cuándo se encargó el correo con el PDF adjunto; evita mandarlo dos veces.
     documento_enviado_en: datetime | None = None
+    # Solo la venta directa del socio (BITS-378): quién la vendió y lo que capturó.
+    socio_id: str | None = None
+    datos_venta: DatosVenta | None = None
 
     @property
     def prima_total_mensual(self) -> Decimal:
@@ -529,6 +544,11 @@ class SolicitudPolizaInvalida(DomainError):
 
 class FueraDeRango(DomainError):
     pass
+
+
+class DocumentosLegalesNoDisponibles(DomainError):
+    def __init__(self) -> None:
+        super().__init__("No se pudo consultar la versión vigente de las condiciones")
 
 
 class CotizacionNoDisponible(DomainError):
@@ -725,6 +745,10 @@ class NombreSocioObligatorio(DomainError):
 class CuentaInternaYaExiste(DomainError):
     def __init__(self) -> None:
         super().__init__("Ya existe una cuenta con ese correo")
+
+
+class CuentaClienteYaExiste(DomainError):
+    """El proveedor de identidad ya tiene una cuenta con ese correo."""
 
 
 class IdentidadNoDisponible(DomainError):

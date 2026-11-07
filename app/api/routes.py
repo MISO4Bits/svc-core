@@ -14,7 +14,7 @@ from app.api.schemas import (
     OtorgarConsentimientoRequest,
     RegistrarClienteRequest,
 )
-from app.domain import ConsentimientoScope, TipoDocumento
+from app.domain import ConsentimientoScope, SolicitudPolizaInvalida, TipoDocumento
 from app.logging_utils import sanear_para_log
 from app.notificaciones import ejecutar_con_contexto
 from app.ports import IdempotencyStore
@@ -102,14 +102,33 @@ async def registrar_cliente(
 
 
 @router.get("/clientes", response_model=ClienteOut, tags=["Clientes"])
-async def buscar_cliente_por_identidad(
+async def buscar_cliente(
+    request: Request,
     service: ServiceDep,
-    identity_ref: Annotated[str, Query(alias="identityRef", max_length=128)],
+    identity_ref: Annotated[str | None, Query(alias="identityRef", max_length=128)] = None,
+    correo: Annotated[str | None, Query(max_length=254)] = None,
+    tipo_documento: Annotated[TipoDocumento | None, Query(alias="tipoDocumento")] = None,
+    numero_documento: Annotated[
+        str | None, Query(alias="numeroDocumento", min_length=4, max_length=20)
+    ] = None,
 ) -> ClienteOut:
-    logger.info(
-        "GET /v1/clientes: solicitud recibida identity_ref=%s", sanear_para_log(identity_ref)
-    )
-    cliente = await service.buscar_por_identity_ref(identity_ref)
+    """Por ``identityRef`` (el cliente que entra), o por ``correo`` o por ``tipoDocumento`` y
+    ``numeroDocumento`` (el socio que busca a quién venderle, BITS-378)."""
+    if identity_ref is not None:
+        if correo is not None or tipo_documento is not None or numero_documento is not None:
+            raise SolicitudPolizaInvalida(
+                "identityRef", "Busca por identityRef, por correo o por documento, no por varios"
+            )
+        logger.info(
+            "GET /v1/clientes: solicitud recibida identity_ref=%s", sanear_para_log(identity_ref)
+        )
+        cliente = await service.buscar_por_identity_ref(identity_ref)
+    else:
+        # Ni el correo ni el documento se escriben en el log.
+        logger.info("GET /v1/clientes: solicitud recibida por correo o documento")
+        cliente = await request.app.state.clientes_asistidos.buscar(
+            correo=correo, tipo_documento=tipo_documento, numero_documento=numero_documento
+        )
     return ClienteOut.model_validate(cliente)
 
 

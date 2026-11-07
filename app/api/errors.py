@@ -20,6 +20,7 @@ from app.domain import (
     CotizacionNoDisponible,
     CuentaInternaYaExiste,
     DocumentoNoDisponible,
+    DocumentosLegalesNoDisponibles,
     DomainError,
     FueraDeRango,
     IdentidadNoDisponible,
@@ -220,6 +221,18 @@ def install_error_handlers(app: FastAPI) -> None:
             detail=str(exc),
             instance=str(request.url),
             codigo="DOCUMENTO_NO_DISPONIBLE",
+        )
+
+    @app.exception_handler(DocumentosLegalesNoDisponibles)
+    async def _documentos_legales_no_disponibles(
+        request: Request, exc: DocumentosLegalesNoDisponibles
+    ) -> JSONResponse:
+        return problema(
+            503,
+            "Condiciones no disponibles",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo="DOCUMENTOS_LEGALES_NO_DISPONIBLES",
         )
 
     @app.exception_handler(CorreoInternoInvalido)

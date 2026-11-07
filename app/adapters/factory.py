@@ -36,8 +36,10 @@ from app.ports import (
     ConsentimientoRepository,
     CotizacionPort,
     CreditosPort,
+    CuentasClientePort,
     DispositivoRepository,
     DocumentoPolizaPort,
+    DocumentosLegalesPort,
     EventPublisher,
     EvidenciaRepository,
     IdempotencyStore,
@@ -168,6 +170,27 @@ def build_polizas(
     else:
         raise ValueError(f"documento_backend no soportado: {settings.documento_backend}")
     return repositorio, cotizaciones, documentos, cerrables
+
+
+def build_documentos_legales(settings: Settings) -> tuple[DocumentosLegalesPort, list[object]]:
+    """Versión vigente de las condiciones de la póliza (venta directa del socio, BITS-378)."""
+    if settings.documentos_legales_backend == "fake":
+        from app.adapters.polizas_fake import DocumentosLegalesFake
+
+        return DocumentosLegalesFake(), []
+    if settings.documentos_legales_backend == "http":
+        from app.adapters.documentos_legales_http import DocumentosLegalesHttp
+
+        http = DocumentosLegalesHttp(
+            settings.productos_base_url,
+            settings.correo_mercado,
+            settings.correo_idioma,
+            settings.productos_timeout_s,
+        )
+        return http, [http]
+    raise ValueError(
+        f"documentos_legales_backend no soportado: {settings.documentos_legales_backend}"
+    )
 
 
 def build_siniestros(
@@ -303,6 +326,25 @@ def build_cuentas_internas(
             raise ValueError("CORE_IDENTITY_PROJECT_ID es obligatorio con cuentas internas reales")
         identidad = IdentityPlatformAdmin(settings.identity_project_id, token_de_servicio())
         return CuentasInternasService(identidad), [identidad]
+    raise ValueError(f"cuentas_internas_backend no soportado: {settings.cuentas_internas_backend}")
+
+
+def build_cuentas_cliente(settings: Settings) -> tuple[CuentasClientePort | None, list[object]]:
+    """Cuentas de los clientes que da de alta un socio (BITS-378). Sigue a
+    ``cuentas_internas_backend``: ``off`` no construye nada y el alta responde 503."""
+    if settings.cuentas_internas_backend == "off":
+        return None, []
+    if settings.cuentas_internas_backend == "fake":
+        from app.adapters.cuentas_fake import CuentasClienteEnMemoria
+
+        return CuentasClienteEnMemoria(), []
+    if settings.cuentas_internas_backend == "real":
+        from app.adapters.identity_admin import IdentityPlatformAdmin, token_de_servicio
+
+        if not settings.identity_project_id:
+            raise ValueError("CORE_IDENTITY_PROJECT_ID es obligatorio con cuentas reales")
+        identidad = IdentityPlatformAdmin(settings.identity_project_id, token_de_servicio())
+        return identidad, [identidad]
     raise ValueError(f"cuentas_internas_backend no soportado: {settings.cuentas_internas_backend}")
 
 

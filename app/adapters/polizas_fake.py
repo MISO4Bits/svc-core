@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from app.domain import (
     CotizacionNoDisponible,
     DatosCredito,
     DocumentoPoliza,
+    DocumentosLegalesNoDisponibles,
     EstadoDocumentoPoliza,
     OrigenDatos,
     Vigencia,
@@ -70,6 +72,7 @@ class CotizacionFake:
         self._por_cliente: dict[str, CotizacionActiva] = {}
         self.caida = caida
         self.llamadas = 0
+        self.precios: list[tuple[int, DatosCredito]] = []
 
     def poner(self, cliente_id: str, cotizacion: CotizacionActiva) -> CotizacionActiva:
         self._por_cliente[cliente_id] = cotizacion
@@ -84,6 +87,24 @@ class CotizacionFake:
             raise CotizacionNoDisponible()
         return self._por_cliente.get(cliente_id)
 
+    async def precio(self, edad: int, datos: DatosCredito) -> CotizacionActiva:
+        """El precio de ejemplo con el crédito y la edad pedidos (sin guardar nada)."""
+        self.llamadas += 1
+        self.precios.append((edad, datos))
+        if self.caida:
+            raise CotizacionNoDisponible()
+        base = cotizacion_de_ejemplo(edad=edad, plazo_meses=datos.plazo_restante_meses)
+        coberturas = tuple(
+            replace(
+                c,
+                suma_asegurada=datos.saldo_insoluto
+                if c.codigo is CodigoCobertura.VIDA
+                else datos.valor_credito,
+            )
+            for c in base.coberturas
+        )
+        return replace(base, datos_credito=datos, coberturas=coberturas)
+
 
 class DocumentoPolizaFake:
     """El documento siempre está listo, con un enlace de mentira."""
@@ -94,3 +115,16 @@ class DocumentoPolizaFake:
             url=f"https://documentos.local/{datos['numero']}.pdf",
             expira_en=now_utc() + timedelta(minutes=15),
         )
+
+
+class DocumentosLegalesFake:
+    """La versión vigente de las condiciones es siempre la misma, salvo que se cambie."""
+
+    def __init__(self, version: str = "V1", *, caido: bool = False) -> None:
+        self.version = version
+        self.caido = caido
+
+    async def version_vigente(self, tipo: str) -> str:
+        if self.caido:
+            raise DocumentosLegalesNoDisponibles()
+        return self.version

@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from app.api.schemas import (
     CoberturaContratadaOut,
     DatosCreditoOut,
+    DatosVentaOut,
     DecisionOut,
     DecisionRequest,
     DetallePendienteOut,
@@ -148,6 +149,14 @@ async def _a_poliza_interna_out(service: PolizaService, p: Poliza) -> PolizaInte
     return PolizaInternaOut(
         **_campos_poliza(p),
         cliente_id=p.cliente_id,
+        socio_id=p.socio_id,
+        datos_venta=DatosVentaOut(
+            direccion=p.datos_venta.direccion,
+            municipio=p.datos_venta.municipio,
+            cuota_mensual=float(p.datos_venta.cuota_mensual),
+        )
+        if p.datos_venta
+        else None,
         ultima_evaluacion_en=p.ultima_evaluacion_en,
         tasa=float(p.tasa),
         version_tarifa=p.version_tarifa,

@@ -65,6 +65,22 @@ class InMemoryClienteRepository:
     async def existe_por_correo(self, email: str) -> bool:
         return email in self._emails
 
+    async def buscar_por_correo(self, email: str) -> Cliente | None:
+        return next((c for c in self._by_id.values() if c.email.lower() == email.lower()), None)
+
+    async def buscar_por_documento(
+        self, tipo_documento: str, numero_documento: str
+    ) -> Cliente | None:
+        return next(
+            (
+                c
+                for c in self._by_id.values()
+                if str(c.tipo_documento) == str(tipo_documento)
+                and c.numero_documento == numero_documento
+            ),
+            None,
+        )
+
     async def confirmar(self, cliente_id: str) -> Cliente | None:
         cliente = self._by_id.get(cliente_id)
         if cliente is None:
@@ -235,7 +251,13 @@ class InMemoryPolizaRepository:
             poliza.ultima_evaluacion_en = evaluada_en
 
     async def emitir(
-        self, poliza_id: str, numero: str, emitida_en: datetime, vigencia: Vigencia
+        self,
+        poliza_id: str,
+        numero: str,
+        emitida_en: datetime,
+        vigencia: Vigencia,
+        *,
+        consumir_evidencias: bool = True,
     ) -> Poliza | None:
         poliza = self._items.get(poliza_id)
         if poliza is None or poliza.estado is not EstadoPoliza.PENDIENTE:
@@ -243,7 +265,7 @@ class InMemoryPolizaRepository:
         if any(p.numero == numero for p in self._items.values()):
             raise NumeroPolizaDuplicado(numero)
         consumidas: list[EvidenciaDePoliza] = []
-        if self._evidencias is not None:
+        if self._evidencias is not None and consumir_evidencias:
             for tipo in TipoEvidencia:
                 vigente = await self._evidencias.vigente(poliza.cliente_id, tipo)
                 if vigente is not None:

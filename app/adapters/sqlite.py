@@ -30,6 +30,7 @@ from app.domain import (
     ConsentimientoScope,
     DanoHogar,
     DatosCredito,
+    DatosVenta,
     Decision,
     DecisionSiniestro,
     Dispositivo,
@@ -167,6 +168,9 @@ class SqliteDatabase:
                 # BITS-235: puntajes de la selfie, en bases de dev anteriores.
                 "ALTER TABLE evidencias ADD COLUMN puntaje_vida REAL",
                 "ALTER TABLE evidencias ADD COLUMN puntaje_coincidencia REAL",
+                # BITS-378: la venta directa del socio, en bases de dev anteriores.
+                "ALTER TABLE polizas ADD COLUMN socio_id TEXT",
+                "ALTER TABLE polizas ADD COLUMN datos_venta TEXT",
                 *_MIGRACION_SINIESTROS,
             ):
                 try:
@@ -316,6 +320,25 @@ class SqliteClienteRepository:
         async with self._db.connect() as conn:
             cursor = await conn.execute("SELECT 1 FROM clientes WHERE email = ?", (email,))
             return await cursor.fetchone() is not None
+
+    async def buscar_por_correo(self, email: str) -> Cliente | None:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM clientes WHERE LOWER(email) = LOWER(?) LIMIT 1", (email,)
+            )
+            row = await cursor.fetchone()
+        return _row_to_cliente(row) if row else None
+
+    async def buscar_por_documento(
+        self, tipo_documento: str, numero_documento: str
+    ) -> Cliente | None:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM clientes WHERE tipo_documento = ? AND numero_documento = ? LIMIT 1",
+                (str(tipo_documento), numero_documento),
+            )
+            row = await cursor.fetchone()
+        return _row_to_cliente(row) if row else None
 
     async def confirmar(self, cliente_id: str) -> Cliente | None:
         async with self._db.connect() as conn:
@@ -639,7 +662,24 @@ def _poliza_a_fila(p: Poliza) -> tuple:
         _utc(p.creada_en),
         _iso(p.ultima_evaluacion_en and p.ultima_evaluacion_en.astimezone(UTC)),
         _iso(p.documento_enviado_en and p.documento_enviado_en.astimezone(UTC)),
+        p.socio_id,
+        json.dumps(_datos_venta_a_dict(p.datos_venta)) if p.datos_venta else None,
     )
+
+
+def _datos_venta_a_dict(d: DatosVenta) -> dict:
+    return {
+        "direccion": d.direccion,
+        "municipio": d.municipio,
+        "cuotaMensual": str(d.cuota_mensual),
+    }
+
+
+def _datos_venta_de_fila(texto: str | None) -> DatosVenta | None:
+    if not texto:
+        return None
+    d = json.loads(texto)
+    return DatosVenta(d["direccion"], d["municipio"], Decimal(d["cuotaMensual"]))
 
 
 _COLUMNAS_POLIZA = (
@@ -647,7 +687,7 @@ _COLUMNAS_POLIZA = (
     "datos_credito, origen_datos, tasa, version_tarifa, cobertura_meses, edad, "
     "documentos_aceptados, pendientes, decisiones, motivos_rechazo, evidencias, numero, "
     "emitida_en, vigencia_desde, vigencia_hasta, rechazada_en, creada_en, ultima_evaluacion_en, "
-    "documento_enviado_en"
+    "documento_enviado_en, socio_id, datos_venta"
 )
 
 
@@ -697,6 +737,8 @@ def _fila_a_poliza(row: aiosqlite.Row) -> Poliza:
         creada_en=_dt(row["creada_en"]),
         ultima_evaluacion_en=_dt(row["ultima_evaluacion_en"]),
         documento_enviado_en=_dt(row["documento_enviado_en"]),
+        socio_id=row["socio_id"],
+        datos_venta=_datos_venta_de_fila(row["datos_venta"]),
     )
 
 
@@ -720,7 +762,7 @@ class SqlitePolizaRepository:
         async with self._db.connect() as conn:
             try:
                 await conn.execute(
-                    f"INSERT INTO polizas ({_COLUMNAS_POLIZA}) VALUES ({', '.join('?' * 25)})",
+                    f"INSERT INTO polizas ({_COLUMNAS_POLIZA}) VALUES ({', '.join('?' * 27)})",
                     _poliza_a_fila(poliza),
                 )
                 await conn.commit()
@@ -833,7 +875,13 @@ class SqlitePolizaRepository:
             await conn.commit()
 
     async def emitir(
-        self, poliza_id: str, numero: str, emitida_en: datetime, vigencia: Vigencia
+        self,
+        poliza_id: str,
+        numero: str,
+        emitida_en: datetime,
+        vigencia: Vigencia,
+        *,
+        consumir_evidencias: bool = True,
     ) -> Poliza | None:
         async with self._db.connect() as conn:
             await conn.execute("BEGIN IMMEDIATE")
@@ -853,26 +901,28 @@ class SqlitePolizaRepository:
                 if cursor.rowcount == 0:
                     await conn.rollback()
                     return None
-                cursor = await conn.execute(
-                    "SELECT cliente_id FROM polizas WHERE id = ?", (poliza_id,)
-                )
-                cliente_id = (await cursor.fetchone())["cliente_id"]
-                cursor = await conn.execute(
-                    f"SELECT id, tipo, estado FROM evidencias WHERE cliente_id = ? AND {_VIGENTE}",
-                    (cliente_id,),
-                )
-                consumidas = [
-                    {"id": r["id"], "tipo": r["tipo"], "estado": r["estado"]}
-                    for r in await cursor.fetchall()
-                ]
-                await conn.execute(
-                    f"UPDATE evidencias SET poliza_ref = ? WHERE cliente_id = ? AND {_VIGENTE}",
-                    (poliza_id, cliente_id),
-                )
-                await conn.execute(
-                    "UPDATE polizas SET evidencias = ? WHERE id = ?",
-                    (json.dumps(consumidas), poliza_id),
-                )
+                if consumir_evidencias:
+                    cursor = await conn.execute(
+                        "SELECT cliente_id FROM polizas WHERE id = ?", (poliza_id,)
+                    )
+                    cliente_id = (await cursor.fetchone())["cliente_id"]
+                    cursor = await conn.execute(
+                        "SELECT id, tipo, estado FROM evidencias "
+                        f"WHERE cliente_id = ? AND {_VIGENTE}",
+                        (cliente_id,),
+                    )
+                    consumidas = [
+                        {"id": r["id"], "tipo": r["tipo"], "estado": r["estado"]}
+                        for r in await cursor.fetchall()
+                    ]
+                    await conn.execute(
+                        f"UPDATE evidencias SET poliza_ref = ? WHERE cliente_id = ? AND {_VIGENTE}",
+                        (poliza_id, cliente_id),
+                    )
+                    await conn.execute(
+                        "UPDATE polizas SET evidencias = ? WHERE id = ?",
+                        (json.dumps(consumidas), poliza_id),
+                    )
                 await conn.commit()
             except aiosqlite.IntegrityError as exc:
                 await conn.rollback()
@@ -995,6 +1045,8 @@ CREATE TABLE IF NOT EXISTS polizas (
     creada_en TEXT NOT NULL,
     ultima_evaluacion_en TEXT,
     documento_enviado_en TEXT,
+    socio_id TEXT,
+    datos_venta TEXT,
     UNIQUE (cliente_id, cotizacion_creada_en)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_polizas_numero ON polizas (numero) WHERE numero IS NOT NULL;
