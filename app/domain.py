@@ -743,6 +743,8 @@ MAX_ARCHIVOS_SINIESTRO = 10
 class TipoSiniestro(StrEnum):
     INCAPACIDAD_TOTAL = "INCAPACIDAD_TOTAL"  # cobertura VIDA
     INCENDIO_TERREMOTO = "INCENDIO_TERREMOTO"  # cobertura HOGAR (Tu casa)
+    # Lo crea el pago automático por sismo (BITS-386), nunca el cliente: no se puede reportar.
+    SISMO_PARAMETRICO = "SISMO_PARAMETRICO"  # cobertura HOGAR
 
     @property
     def cobertura(self) -> CodigoCobertura:
@@ -799,9 +801,61 @@ class SaldoCredito:
     origen: OrigenSaldo
 
 
+@dataclass(frozen=True)
+class EvidenciaPedida:
+    """Lo que el ``ADMIN`` escribió al pedir más evidencia, tal como lo ve el cliente."""
+
+    detalle: str
+    pedida_en: datetime
+
+
+class BeneficiarioPago(StrEnum):
+    BANCO = "BANCO"
+    CLIENTE = "CLIENTE"
+
+
+@dataclass(frozen=True)
+class LineaPago:
+    """``destino`` es texto listo para mostrar, p. ej. «Cuenta de ahorros terminada en 4821»."""
+
+    beneficiario: BeneficiarioPago
+    valor: Decimal
+    destino: str
+
+
+@dataclass(frozen=True)
+class Pago:
+    """La orden de pago simulada: una o dos líneas, y una sola por siniestro."""
+
+    pagado_en: datetime
+    lineas: tuple[LineaPago, ...]
+
+
+class ConflictoSiniestro(DomainError):
+    """Base de los conflictos 409 de siniestros con un ``codigo`` estable."""
+
+    codigo = "CONFLICTO"
+
+
+class TransicionInvalida(ConflictoSiniestro):
+    """El estado del siniestro no admite esa acción (p. ej. enviar evidencia sin que se haya
+    pedido, o decidir uno que está en ``FALTA_INFORMACION``)."""
+
+    codigo = "ESTADO_NO_PERMITE"
+
+    def __init__(self, estado: EstadoSiniestro) -> None:
+        super().__init__(f"El siniestro está {estado}: no admite esa acción")
+        self.estado = estado
+
+
 @dataclass
 class Siniestro:
-    """``numero`` es el radicado que ve el cliente. ``destino_pago`` se guarda tal como llega."""
+    """``numero`` es el radicado que ve el cliente. ``destino_pago`` se guarda tal como llega.
+
+    Las transiciones son métodos del dominio (``pedir_evidencia``, ``entregar_evidencia``,
+    ``pagar`` y ``rechazar``): las llama la bandeja del ``ADMIN`` y el pago por sismo por igual.
+    Cada una exige el estado del que parte y deja el siniestro como quedaría si se guardara.
+    """
 
     cliente_id: str
     poliza_id: str
@@ -817,12 +871,50 @@ class Siniestro:
     reportado_en: datetime = field(default_factory=now_utc)
     ultima_entrega_en: datetime = field(default_factory=now_utc)
     actualizado_en: datetime = field(default_factory=now_utc)
+    evidencia_pedida: EvidenciaPedida | None = None
+    motivo_rechazo: str | None = None
+    pago: Pago | None = None
+    # Solo el paramétrico (BITS-386): lo creó el sismo y no una persona; ``evento`` es
+    # ``{fecha, municipio, magnitud}``.
+    automatico: bool = False
+    evento: dict | None = None
 
+    @property
+    def fecha_limite(self) -> datetime | None:
+        """La última entrega más un mes (art. 1080). Solo corre en ``EN_ESTUDIO``: en
+        ``FALTA_INFORMACION`` el reloj se detiene y en los demás ya no aplica."""
+        if self.estado is not EstadoSiniestro.EN_ESTUDIO:
+            return None
+        return sumar_meses(self.ultima_entrega_en, 1)
 
-class ConflictoSiniestro(DomainError):
-    """Base de los conflictos 409 de siniestros con un ``codigo`` estable."""
+    def _exigir(self, estado: EstadoSiniestro) -> None:
+        if self.estado is not estado:
+            raise TransicionInvalida(self.estado)
 
-    codigo = "CONFLICTO"
+    def pedir_evidencia(self, detalle: str, ahora: datetime) -> None:
+        self._exigir(EstadoSiniestro.EN_ESTUDIO)
+        self.estado = EstadoSiniestro.FALTA_INFORMACION
+        self.evidencia_pedida = EvidenciaPedida(detalle.strip(), ahora)
+        self.actualizado_en = ahora
+
+    def entregar_evidencia(self, archivos: tuple[ArchivoSiniestro, ...], ahora: datetime) -> None:
+        self._exigir(EstadoSiniestro.FALTA_INFORMACION)
+        self.archivos = (*self.archivos, *archivos)
+        self.ultima_entrega_en = ahora
+        self.estado = EstadoSiniestro.EN_ESTUDIO
+        self.actualizado_en = ahora
+
+    def pagar(self, pago: Pago, ahora: datetime) -> None:
+        self._exigir(EstadoSiniestro.EN_ESTUDIO)
+        self.estado = EstadoSiniestro.PAGADO
+        self.pago = pago
+        self.actualizado_en = ahora
+
+    def rechazar(self, motivo: str, ahora: datetime) -> None:
+        self._exigir(EstadoSiniestro.EN_ESTUDIO)
+        self.estado = EstadoSiniestro.RECHAZADO
+        self.motivo_rechazo = motivo.strip()
+        self.actualizado_en = ahora
 
 
 class FueraDeVigencia(ConflictoSiniestro):

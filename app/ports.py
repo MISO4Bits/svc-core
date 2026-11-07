@@ -16,6 +16,7 @@ from app.domain import (
     Dispositivo,
     DocumentoPoliza,
     DomainEvent,
+    EstadoSiniestro,
     Evidencia,
     FiltroPolizas,
     MotivoRechazoPoliza,
@@ -299,6 +300,16 @@ class SiniestroRepository(Protocol):
     async def en_curso(self, poliza_id: str, tipo: TipoSiniestro) -> Siniestro | None:
         """El siniestro de esa póliza y cobertura que está ``EN_ESTUDIO`` o
         ``FALTA_INFORMACION``, o ``None``."""
+        ...
+
+    async def listar_de_cliente(self, cliente_id: str) -> list[Siniestro]:
+        """Todos los del cliente, del más reciente al más antiguo."""
+        ...
+
+    async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
+        """Guarda lo que cambió una transición (estado, archivos, lo pedido, el motivo, el
+        pago) solo si el siniestro sigue en ``estado_anterior``, en la misma operación. Devuelve
+        ``False`` si otro lo cambió antes: dos acciones simultáneas dejan una sola."""
         ...
 
 

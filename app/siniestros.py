@@ -21,6 +21,7 @@ from app.domain import (
     ClaseArchivo,
     ClienteNoEncontrado,
     EstadoPoliza,
+    EstadoSiniestro,
     FueraDeVigencia,
     NumeroSiniestroDuplicado,
     OrigenSaldo,
@@ -29,9 +30,11 @@ from app.domain import (
     SaldoCredito,
     Siniestro,
     SiniestroEnCurso,
+    SiniestroNoEncontrado,
     SolicitudSiniestroInvalida,
     TipoNoCubierto,
     TipoSiniestro,
+    TransicionInvalida,
     generar_numero_siniestro,
     new_id,
     now_utc,
@@ -149,7 +152,7 @@ class SiniestroService:
 
         siniestro_id = new_id()
         ahora = self._ahora()
-        archivos = await self._guardar_archivos(cliente_id, siniestro_id, reporte, ahora)
+        archivos = await self._guardar_archivos(cliente_id, siniestro_id, reporte.archivos, ahora)
         saldo = await self._saldo(cliente_id, poliza, ahora)
 
         siniestro = await self._crear(
@@ -180,6 +183,66 @@ class SiniestroService:
         )
         return siniestro
 
+    # --- consulta ---
+
+    async def obtener(self, cliente_id: str, siniestro_id: str) -> Siniestro:
+        """Un siniestro ajeno responde igual que uno que no existe."""
+        siniestro = await self._siniestros.obtener(siniestro_id)
+        if siniestro is None or siniestro.cliente_id != cliente_id:
+            raise SiniestroNoEncontrado(siniestro_id)
+        return siniestro
+
+    async def listar(self, cliente_id: str) -> list[Siniestro]:
+        if await self._clientes.obtener(cliente_id) is None:
+            raise ClienteNoEncontrado(cliente_id)
+        return await self._siniestros.listar_de_cliente(cliente_id)
+
+    # --- lo que falta ---
+
+    async def entregar_evidencias(
+        self,
+        cliente_id: str,
+        siniestro_id: str,
+        archivos: tuple[ArchivoEntrada, ...],
+        idempotency_key: str | None = None,
+    ) -> Siniestro:
+        """El cliente envía lo que Solventa le pidió: el siniestro vuelve a ``EN_ESTUDIO``, el
+        reloj del plazo arranca de nuevo y no se avisa a nadie (la bandeja es el aviso del
+        ``ADMIN``). Idempotente con ``idempotency_key``."""
+        clave = (
+            f"siniestro-evidencias:{cliente_id}:{siniestro_id}:{idempotency_key}"
+            if idempotency_key
+            else None
+        )
+        if clave is not None and await self._idempotency.get(clave) is not None:
+            logger.info("entrega repetida siniestro_id=%s", sanear_para_log(siniestro_id))
+            return await self.obtener(cliente_id, siniestro_id)
+
+        siniestro = await self.obtener(cliente_id, siniestro_id)
+        if siniestro.estado is not EstadoSiniestro.FALTA_INFORMACION:
+            raise TransicionInvalida(siniestro.estado)
+        if not archivos:
+            raise SolicitudSiniestroInvalida("archivos", "Falta la evidencia")
+        if len(archivos) > MAX_ARCHIVOS_SINIESTRO:
+            raise SolicitudSiniestroInvalida("archivos", "Son demasiados archivos")
+
+        ahora = self._ahora()
+        guardados = await self._guardar_archivos(cliente_id, siniestro.id, archivos, ahora)
+        anterior = siniestro.estado
+        siniestro.entregar_evidencia(guardados, ahora)
+        if not await self._siniestros.actualizar(siniestro, anterior):
+            # Otra entrega llegó primero.
+            raise TransicionInvalida(EstadoSiniestro.EN_ESTUDIO)
+        if clave is not None:
+            await self._idempotency.put(clave, {"siniestroId": siniestro.id})
+        logger.info(
+            "evidencia entregada siniestro_id=%s cliente_id=%s archivos=%d",
+            siniestro.id,
+            sanear_para_log(cliente_id),
+            len(guardados),
+        )
+        return siniestro
+
     # --- validaciones ---
 
     def _validar_vigencia(self, poliza: Poliza, fecha: date) -> None:
@@ -203,6 +266,10 @@ class SiniestroService:
 
     @staticmethod
     def _validar_contenido(reporte: ReporteSiniestro) -> None:
+        if reporte.tipo is TipoSiniestro.SISMO_PARAMETRICO:
+            raise SolicitudSiniestroInvalida(
+                "tipo", "Este siniestro lo crea Solventa, no el cliente"
+            )
         incendio = reporte.tipo is TipoSiniestro.INCENDIO_TERREMOTO
         narracion = (reporte.narracion or "").strip()
         if incendio and not narracion:
@@ -227,15 +294,19 @@ class SiniestroService:
     # --- archivos y saldo ---
 
     async def _guardar_archivos(
-        self, cliente_id: str, siniestro_id: str, reporte: ReporteSiniestro, ahora: datetime
+        self,
+        cliente_id: str,
+        siniestro_id: str,
+        entradas: tuple[ArchivoEntrada, ...],
+        ahora: datetime,
     ) -> tuple[ArchivoSiniestro, ...]:
         # Se validan todos antes de guardar alguno: un archivo malo no deja los otros en el bucket.
         tipos = [
             validar_imagen(a.contenido, max_bytes=self._max_bytes, max_pixeles=self._max_pixeles)
-            for a in reporte.archivos
+            for a in entradas
         ]
         guardados: list[ArchivoSiniestro] = []
-        for entrada, content_type in zip(reporte.archivos, tipos, strict=True):
+        for entrada, content_type in zip(entradas, tipos, strict=True):
             archivo_id = new_id()
             referencia = await self._almacen.guardar(
                 f"siniestros/{cliente_id}/{siniestro_id}/{archivo_id}.{_EXTENSION[content_type]}",
