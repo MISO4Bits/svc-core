@@ -26,6 +26,7 @@ from app.adapters.verificador_mock import VerificadorBiometricoMock, Verificador
 from app.avisos import AvisoService
 from app.calidad_imagen import UmbralesCalidad
 from app.config import Settings
+from app.cuentas_internas import CuentasInternasService
 from app.notificaciones import NotificacionService
 from app.ports import (
     AlmacenEvidencias,
@@ -232,6 +233,28 @@ def build_notificaciones(
         idioma=settings.correo_idioma,
     )
     return servicio, cerrables
+
+
+def build_cuentas_internas(
+    settings: Settings,
+) -> tuple[CuentasInternasService | None, list[object]]:
+    """Servicio de cuentas del personal y los adaptadores que hay que cerrar al apagar.
+
+    ``off`` (por defecto) no construye nada: el endpoint responde 503."""
+    if settings.cuentas_internas_backend == "off":
+        return None, []
+    if settings.cuentas_internas_backend == "fake":
+        from app.adapters.cuentas_fake import CuentasInternasEnMemoria
+
+        return CuentasInternasService(CuentasInternasEnMemoria()), []
+    if settings.cuentas_internas_backend == "real":
+        from app.adapters.identity_admin import IdentityPlatformAdmin, token_de_servicio
+
+        if not settings.identity_project_id:
+            raise ValueError("CORE_IDENTITY_PROJECT_ID es obligatorio con cuentas internas reales")
+        identidad = IdentityPlatformAdmin(settings.identity_project_id, token_de_servicio())
+        return CuentasInternasService(identidad), [identidad]
+    raise ValueError(f"cuentas_internas_backend no soportado: {settings.cuentas_internas_backend}")
 
 
 async def maybe_init(obj: object) -> None:

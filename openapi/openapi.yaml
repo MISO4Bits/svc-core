@@ -43,6 +43,8 @@ tags:
     description: Cola de pólizas de todos los clientes y decisión del personal de Solventa.
   - name: Dispositivos
     description: Dispositivos de los clientes para los avisos push (BITS-229).
+  - name: Usuarios internos
+    description: Cuentas del personal de Solventa, administradores y socios (BITS-374).
 
 security:
   - serviceAuth: []
@@ -692,6 +694,41 @@ paths:
         '204':
           description: El dispositivo ya no está registrado para el cliente.
 
+  /v1/usuarios-internos:
+    post:
+      operationId: crearUsuarioInterno
+      tags: [Usuarios internos]
+      summary: Crea una cuenta del personal de Solventa (administrador o socio)
+      description: |
+        Interno y sin gateway: solo lo llama bff-web, desde la ruta que exige el rol `ADMIN`.
+
+        Crea la cuenta en Identity Platform con el correo ya verificado, el rol en
+        `customAttributes` y el nombre en `displayName`. El `uid` de una cuenta `SOCIO` es su
+        `socioId`. El correo debe ser `@solventa4bits.com`, sin distinguir mayúsculas, y se guarda
+        en minúsculas. `nombre` es obligatorio para `SOCIO` y puede repetirse entre cuentas.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrearUsuarioInternoRequest' }
+      responses:
+        '201':
+          description: Cuenta creada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsuarioInterno' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '409':
+          description: Ya existe una cuenta con ese correo (`errores[].campo = correo`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+        '503':
+          description: Identity Platform no responde (`codigo = IDENTIDAD_NO_DISPONIBLE`). Reintentar.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemaPoliza' }
+
 components:
 
   securitySchemes:
@@ -1033,6 +1070,7 @@ components:
             - SOLICITUD_VENCIDA
             - PENDIENTE_NO_APLICA
             - DOCUMENTO_NO_DISPONIBLE
+            - IDENTIDAD_NO_DISPONIBLE
     CodigoPendiente:
       type: string
       enum:
@@ -1568,3 +1606,38 @@ components:
       required: [dispositivoId]
       properties:
         dispositivoId: { type: string, format: uuid }
+
+    CrearUsuarioInternoRequest:
+      type: object
+      additionalProperties: false
+      required: [correo, contrasena, rol]
+      properties:
+        correo:
+          type: string
+          maxLength: 254
+          description: Debe ser del dominio @solventa4bits.com.
+        contrasena:
+          type: string
+          minLength: 8
+          maxLength: 128
+          writeOnly: true
+        rol: { $ref: "#/components/schemas/RolInterno" }
+        nombre:
+          type: string
+          maxLength: 100
+          description: Obligatorio para SOCIO; el cliente lo ve en la petición del socio.
+
+    UsuarioInterno:
+      type: object
+      additionalProperties: false
+      required: [uid, correo, rol]
+      properties:
+        uid:
+          type: string
+          description: Id en Identity Platform. Para un SOCIO es su socioId.
+        correo: { type: string }
+        rol: { $ref: "#/components/schemas/RolInterno" }
+
+    RolInterno:
+      type: string
+      enum: [ADMIN, SOCIO]

@@ -678,3 +678,54 @@ class Dispositivo:
     id: str = field(default_factory=new_id)
     registrado_en: datetime = field(default_factory=now_utc)
     ultimo_visto_en: datetime = field(default_factory=now_utc)
+
+
+# --- Cuentas internas del personal de Solventa (BITS-374) ---
+
+DOMINIO_INTERNO = "solventa4bits.com"
+
+
+class RolInterno(StrEnum):
+    """Rol de una cuenta del personal. Vive en los ``customAttributes`` de Identity Platform."""
+
+    ADMIN = "ADMIN"
+    SOCIO = "SOCIO"
+
+
+@dataclass(frozen=True)
+class CuentaInterna:
+    """``uid`` es el id de Identity Platform; el de un ``SOCIO`` es su ``socioId``. ``rol`` es
+    ``None`` solo al buscar una cuenta que no es del personal (p. ej. de un cliente)."""
+
+    uid: str
+    correo: str
+    rol: RolInterno | None
+    nombre: str | None = None
+
+
+def es_correo_interno(correo: str) -> bool:
+    """El correo es del dominio de Solventa, sin distinguir mayúsculas."""
+    usuario, _, dominio = correo.strip().lower().rpartition("@")
+    return bool(usuario) and dominio == DOMINIO_INTERNO
+
+
+class CorreoInternoInvalido(DomainError):
+    def __init__(self) -> None:
+        super().__init__(f"El correo debe ser del dominio @{DOMINIO_INTERNO}")
+
+
+class NombreSocioObligatorio(DomainError):
+    def __init__(self) -> None:
+        super().__init__("El nombre es obligatorio para una cuenta SOCIO")
+
+
+class CuentaInternaYaExiste(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Ya existe una cuenta con ese correo")
+
+
+class IdentidadNoDisponible(DomainError):
+    """Identity Platform no respondió o rechazó la operación. Se puede reintentar."""
+
+    def __init__(self) -> None:
+        super().__init__("El proveedor de identidad no está disponible, intenta de nuevo")

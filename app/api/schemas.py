@@ -22,6 +22,7 @@ from app.domain import (
     MotivoRechazo,
     OrigenDatos,
     PlataformaDispositivo,
+    RolInterno,
     TipoDecision,
     TipoDocumento,
     TipoEvidencia,
@@ -292,3 +293,16 @@ class RegistrarDispositivoRequest(_Model):
 
 class DispositivoOut(_Model):
     dispositivo_id: str
+
+
+class CrearUsuarioInternoRequest(_Model):
+    correo: str = Field(max_length=254, pattern=_EMAIL)
+    contrasena: str = Field(min_length=8, max_length=128)
+    rol: RolInterno
+    nombre: str | None = Field(default=None, max_length=100)
+
+
+class UsuarioInternoOut(_Model):
+    uid: str
+    correo: str
+    rol: RolInterno

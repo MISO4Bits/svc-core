@@ -10,6 +10,7 @@ from app.domain import (
     Consentimiento,
     ConsentimientoScope,
     CotizacionActiva,
+    CuentaInterna,
     Decision,
     Dispositivo,
     DocumentoPoliza,
@@ -22,6 +23,7 @@ from app.domain import (
     PlantillaCorreo,
     Poliza,
     ReferenciaDocumento,
+    RolInterno,
     TipoCorreo,
     TipoEvidencia,
     Veredicto,
@@ -85,6 +87,23 @@ class IdentidadAdminPort(Protocol):
     async def generar_codigo_verificacion(self, email: str) -> str:
         """Pide a Identity Platform un código de un solo uso para verificar ese correo.
         Lanza ``NotificacionError`` si no lo obtiene."""
+        ...
+
+
+@runtime_checkable
+class CuentasInternasPort(Protocol):
+    """Cuentas del personal de Solventa en Identity Platform (BITS-374)."""
+
+    async def crear_cuenta(
+        self, correo: str, contrasena: str, rol: RolInterno, nombre: str | None
+    ) -> CuentaInterna:
+        """Crea la cuenta con el correo ya verificado y el rol en ``customAttributes``.
+        Lanza ``CuentaInternaYaExiste`` si el correo está tomado e ``IdentidadNoDisponible`` si
+        el proveedor falla."""
+        ...
+
+    async def buscar_por_correo(self, correo: str) -> CuentaInterna | None:
+        """La cuenta con ese correo, o ``None``. Lanza ``IdentidadNoDisponible`` si falla."""
         ...
 
 
