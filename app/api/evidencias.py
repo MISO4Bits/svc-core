@@ -55,6 +55,25 @@ async def subir_evidencia(
 
 
 @router.get(
+    "/evidencias-identidad/{evidencia_id}/imagen",
+    tags=["Evidencias de identidad (backoffice)"],
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}, "image/png": {}}}},
+)
+async def obtener_imagen_de_evidencia(evidencia_id: str, service: EvidenciasDep) -> Response:
+    # La imagen no se escribe en el log, solo su id.
+    logger.info(
+        "GET /v1/evidencias-identidad/%s/imagen: solicitud recibida", sanear_para_log(evidencia_id)
+    )
+    contenido, tipo = await service.imagen(evidencia_id)
+    return Response(
+        content=contenido,
+        media_type=tipo,
+        headers={"Cache-Control": "no-store", "Content-Disposition": "inline"},
+    )
+
+
+@router.get(
     "/clientes/{cliente_id}/evidencias-identidad",
     response_model=list[EstadoTipoEvidenciaOut],
 )
