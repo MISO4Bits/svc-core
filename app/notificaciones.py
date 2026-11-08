@@ -112,6 +112,37 @@ class NotificacionService:
         enlace = con_parametro(self._url_verificacion, "oobCode", codigo)
         return {**self._variables_base(cliente), "enlaceVerificacion": enlace}
 
+    async def enviar_correos_de_alta(self, cliente: Cliente, contrasena: str) -> None:
+        """Bienvenida y datos de acceso de un cliente que dio de alta un socio (BITS-379).
+
+        Salen con el alta y no con la venta: solo el cliente nuevo los necesita; uno que ya tenía
+        cuenta se entera de la venta por el correo de la póliza. Cada correo va por su lado, como
+        en el registro: si uno falla, el otro sale. La contraseña temporal solo viaja como
+        variable de ``cuenta-activada``: no se registra ni se guarda.
+        """
+        await self._enviar_de_alta(cliente, TipoCorreo.BIENVENIDA_VENTA, {"urlWeb": self._url_web})
+        await self._enviar_de_alta(
+            cliente,
+            TipoCorreo.CUENTA_ACTIVADA,
+            {"correo": cliente.email, "contrasena": contrasena, "urlWeb": self._url_web},
+        )
+
+    async def _enviar_de_alta(
+        self, cliente: Cliente, tipo: TipoCorreo, variables_extra: dict[str, str]
+    ) -> None:
+        with tracer.start_as_current_span(
+            "core.preparar_correo", attributes={"correo.plantilla": str(tipo)}
+        ):
+            try:
+                await self._publicar(
+                    cliente, tipo, {**self._variables_base(cliente), **variables_extra}
+                )
+            except NotificacionError as exc:
+                logger.warning("correo no enviado plantilla=%s motivo=%s", tipo, exc)
+            except Exception as exc:  # noqa: BLE001 - el alta ya se hizo
+                # Solo el tipo del error: el detalle podría traer la contraseña.
+                logger.warning("correo no enviado plantilla=%s (%s)", tipo, type(exc).__name__)
+
     async def enviar_poliza_emitida(
         self, cliente: Cliente, numero: str, documento: ReferenciaDocumento
     ) -> None:

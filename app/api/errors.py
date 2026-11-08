@@ -12,6 +12,7 @@ from app.domain import (
     ArchivoNoEncontrado,
     ClienteNoActivo,
     ClienteNoEncontrado,
+    ClientesDistintos,
     ClienteYaExiste,
     ConflictoPoliza,
     ConflictoSiniestro,
@@ -20,6 +21,7 @@ from app.domain import (
     CotizacionNoDisponible,
     CuentaInternaYaExiste,
     DocumentoNoDisponible,
+    DocumentosLegalesNoDisponibles,
     DomainError,
     FueraDeRango,
     IdentidadNoDisponible,
@@ -73,6 +75,17 @@ def install_error_handlers(app: FastAPI) -> None:
             "El cliente ya existe",
             detail=str(exc),
             instance=str(request.url),
+            errores=[{"campo": exc.campo, "mensaje": str(exc)}],
+        )
+
+    @app.exception_handler(ClientesDistintos)
+    async def _clientes_distintos(request: Request, exc: ClientesDistintos) -> JSONResponse:
+        return problema(
+            409,
+            "El correo y el documento son de cuentas distintas",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo="CLIENTES_DISTINTOS",
             errores=[{"campo": exc.campo, "mensaje": str(exc)}],
         )
 
@@ -220,6 +233,18 @@ def install_error_handlers(app: FastAPI) -> None:
             detail=str(exc),
             instance=str(request.url),
             codigo="DOCUMENTO_NO_DISPONIBLE",
+        )
+
+    @app.exception_handler(DocumentosLegalesNoDisponibles)
+    async def _documentos_legales_no_disponibles(
+        request: Request, exc: DocumentosLegalesNoDisponibles
+    ) -> JSONResponse:
+        return problema(
+            503,
+            "Condiciones no disponibles",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo="DOCUMENTOS_LEGALES_NO_DISPONIBLES",
         )
 
     @app.exception_handler(CorreoInternoInvalido)

@@ -58,15 +58,36 @@ paths:
     get:
       operationId: buscarClientePorIdentidad
       tags: [Clientes]
-      summary: Busca un cliente por su identidad de autenticación
+      summary: Busca un cliente por su identidad, su correo o su documento
       description: |
-        Resuelve `identityRef` (el `sub` de Identity Platform) al cliente.
-        Lo usa el BFF para asociar la sesión con el `clienteId` tras el login.
+        - `identityRef` (el `sub` de Identity Platform), solo: lo usa el BFF para asociar la sesión
+          con el `clienteId` tras el login. No se mezcla con lo demás (`400`).
+        - `correo`, o `tipoDocumento` y `numeroDocumento` juntos, o **los dos a la vez**: el socio
+          busca a quién venderle (BITS-378). El correo no distingue mayúsculas. `400` si no llega
+          ninguno o si el tipo viene sin el número.
+
+        Con correo y documento a la vez deben ser de la misma cuenta: si son de cuentas distintas,
+        o el correo es de una cuenta y el documento no es de nadie, `409 CLIENTES_DISTINTOS` con el
+        campo que choca (`errores[0].campo`). Si solo el documento existe, devuelve esa cuenta.
+
+        `404` si no hay ningún cliente con ese dato.
       parameters:
         - name: identityRef
           in: query
-          required: true
+          required: false
           schema: { type: string, maxLength: 128 }
+        - name: correo
+          in: query
+          required: false
+          schema: { type: string, maxLength: 254 }
+        - name: tipoDocumento
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/TipoDocumento' }
+        - name: numeroDocumento
+          in: query
+          required: false
+          schema: { type: string, minLength: 4, maxLength: 20 }
       responses:
         '200':
           description: Cliente encontrado.
@@ -75,6 +96,11 @@ paths:
               schema: { $ref: '#/components/schemas/Cliente' }
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: El correo y el documento son de cuentas distintas (`codigo = CLIENTES_DISTINTOS`, `errores[0].campo` dice cuál choca).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
     post:
       operationId: registrarCliente
       tags: [Clientes]
@@ -125,6 +151,54 @@ paths:
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
         '409': { $ref: '#/components/responses/Conflicto' }
         '422': { $ref: '#/components/responses/EntidadNoProcesable' }
+
+  /v1/clientes/asistidos:
+    post:
+      operationId: crearClienteAsistido
+      tags: [Venta directa]
+      summary: Da de alta a un cliente que un socio atiende en el backoffice (BITS-378)
+      description: |
+        **Interno**: lo llama bff-web desde la ruta que exige el rol `SOCIO`. Crea la cuenta del
+        cliente en Identity Platform con el correo ya verificado y una contraseña temporal que
+        genera Core (el socio no la ve), registra al cliente por el canal `BACKOFFICE` con el
+        correo confirmado y **sin ninguna autorización de datos**: el cliente no las dio, así
+        que Perfilamiento no consulta nada hasta que él las otorgue.
+
+        Responde `409` con `errores[].campo` (`correo` o `documento`) si ya hay un cliente, o si
+        el correo ya tiene una cuenta en Identity Platform. Si el registro falla después de
+        crear la cuenta, esta se borra. Con `Idempotency-Key`, un reintento devuelve la respuesta
+        original `201` sin crear nada ni mandar otro correo.
+
+        Tras responder, en segundo plano, publica la **bienvenida** (`bienvenida-venta`) y los datos
+        de acceso (`cuenta-activada`, con el correo y la contraseña temporal). Salen aquí y no con
+        la venta: solo el cliente nuevo los necesita. La contraseña no vuelve en la respuesta ni se
+        guarda.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrearClienteAsistidoRequest' }
+      responses:
+        '201':
+          description: Cliente creado.
+          headers:
+            Location:
+              description: URI del cliente creado.
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cliente' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '503':
+          description: Identity Platform no está disponible. No se creó nada.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+      security:
+        - serviceAuth: []
 
   /v1/clientes/disponibilidad:
     get:
@@ -560,6 +634,82 @@ paths:
           $ref: '#/components/responses/SolicitudInvalida'
       security:
       - serviceAuth: []
+    post:
+      operationId: venderPoliza
+      tags: [Venta directa]
+      summary: Emite la póliza que un socio vende a un cliente (BITS-378)
+      description: |
+        **Interno**. Emite al instante, sin solicitud ni pendientes: el socio verificó al cliente
+        cara a cara y el banco ya aprobó el crédito. El precio se calcula de nuevo con la tarifa
+        del momento (el mismo cálculo de `POST /v1/polizas/precio`) y la póliza queda a nombre del
+        cliente con `socioId` y `datosVenta`. Acepta las condiciones de la póliza en la versión
+        vigente en Productos. **No consume las evidencias de identidad del cliente**.
+
+        Publica `PolizaEmitida`: el documento, su correo con el PDF y el aviso push salen por el
+        flujo de siempre. No manda ningún otro correo (la bienvenida es del alta del cliente). Con
+        `Idempotency-Key`, un reintento del mismo socio devuelve la respuesta original `201`.
+
+        `400` si falta `VIDA` o algún dato, `403 CLIENTE_NO_ACTIVO`, `404` si no existe el
+        cliente, `422 FUERA_DE_RANGO`, `503` si Cotización o Productos no responden (no se emite
+        nada).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VenderPolizaRequest' }
+      responses:
+        '201':
+          description: Póliza emitida.
+          headers:
+            Location:
+              description: URI de la póliza emitida.
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolizaInterna' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/ConflictoPoliza' }
+        '422': { $ref: '#/components/responses/FueraDeRango' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+      security:
+        - serviceAuth: []
+  /v1/polizas/precio:
+    post:
+      operationId: calcularPrecioDePoliza
+      tags: [Venta directa]
+      summary: Precio del seguro para un cliente, sin guardar nada (BITS-378)
+      description: |
+        **Interno**. Calcula lo que costaría asegurar un crédito nuevo con las mismas reglas y la
+        misma tarifa que la cotización del autoservicio, con Vida y Hogar. **No crea cotización
+        ni solicitud** y no publica `CotizacionCreada`, así que no toca la solicitud pendiente
+        que el cliente tenga por su cuenta. El crédito es nuevo: el saldo es el valor. La edad
+        sale de la fecha de nacimiento del cliente.
+
+        `422 FUERA_DE_RANGO` si el cliente no tiene entre 18 y 65 años o el crédito termina
+        después de los 75. `403 CLIENTE_NO_ACTIVO` si el cliente no está `ACTIVO`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrecioPolizaRequest' }
+      responses:
+        '200':
+          description: El precio calculado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrecioPoliza' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/FueraDeRango' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+      security:
+        - serviceAuth: []
+
   /v1/polizas/{polizaId}:
     parameters:
     - $ref: '#/components/parameters/PolizaId'
@@ -1722,6 +1872,15 @@ components:
           clienteId:
             type: string
             format: uuid
+          socioId:
+            type:
+            - string
+            - 'null'
+            description: Solo las pólizas que vendió un socio (BITS-378).
+          datosVenta:
+            oneOf:
+            - $ref: '#/components/schemas/DatosVenta'
+            - type: 'null'
           ultimaEvaluacionEn:
             type:
             - string
@@ -1783,6 +1942,87 @@ components:
                 decididaEn:
                   type: string
                   format: date-time
+    CrearClienteAsistidoRequest:
+      type: object
+      additionalProperties: false
+      required: [tipoDocumento, numeroDocumento, primerNombre, primerApellido, fechaNacimiento, email, telefono]
+      properties:
+        tipoDocumento: { $ref: '#/components/schemas/TipoDocumento' }
+        numeroDocumento:
+          type: string
+          minLength: 4
+          maxLength: 20
+          pattern: '^[0-9A-Za-z-]+$'
+        primerNombre: { type: string, minLength: 1, maxLength: 60 }
+        segundoNombre: { type: [string, 'null'], maxLength: 60 }
+        primerApellido: { type: string, minLength: 1, maxLength: 60 }
+        segundoApellido: { type: [string, 'null'], maxLength: 60 }
+        fechaNacimiento: { type: string, format: date }
+        email: { type: string, format: email, maxLength: 254 }
+        telefono:
+          type: string
+          pattern: '^\+?[0-9]{7,15}$'
+
+    PrecioPolizaRequest:
+      type: object
+      additionalProperties: false
+      required: [clienteId, valorCredito, plazoRestanteMeses, entidadAcreedora]
+      properties:
+        clienteId: { type: string, minLength: 1, maxLength: 64 }
+        valorCredito: { type: number, exclusiveMinimum: 0, description: El crédito es nuevo, así que el saldo es este mismo valor. }
+        plazoRestanteMeses: { type: integer, minimum: 1, maximum: 480 }
+        entidadAcreedora: { type: string, minLength: 1, maxLength: 80 }
+
+    VenderPolizaRequest:
+      type: object
+      additionalProperties: false
+      required: [clienteId, socioId, coberturas, valorCredito, plazoRestanteMeses, entidadAcreedora, cuotaMensual, direccion, municipio]
+      properties:
+        clienteId: { type: string, minLength: 1, maxLength: 64 }
+        socioId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: El `uid` del socio que vende (lo pone el BFF con el del token).
+        coberturas:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/CodigoCobertura' }
+          description: Debe incluir `VIDA`.
+        valorCredito: { type: number, exclusiveMinimum: 0 }
+        plazoRestanteMeses: { type: integer, minimum: 1, maximum: 480 }
+        entidadAcreedora: { type: string, minLength: 1, maxLength: 80 }
+        cuotaMensual: { type: number, exclusiveMinimum: 0, description: Cuota mensual del crédito. }
+        direccion: { type: string, minLength: 1, maxLength: 200, description: Dirección del inmueble. }
+        municipio: { type: string, minLength: 1, maxLength: 200 }
+
+    PrecioPoliza:
+      type: object
+      additionalProperties: false
+      required: [edad, datosCredito, origenDatos, tasa, versionTarifa, coberturaMeses, coberturas, vigenciaCotizacion, creadaEn]
+      properties:
+        edad: { type: integer }
+        datosCredito: { $ref: '#/components/schemas/DatosCredito' }
+        origenDatos: { $ref: '#/components/schemas/OrigenDatos' }
+        tasa: { type: number }
+        versionTarifa: { type: integer }
+        coberturaMeses: { type: integer }
+        coberturas:
+          type: array
+          items: { $ref: '#/components/schemas/CoberturaContratada' }
+        vigenciaCotizacion: { $ref: '#/components/schemas/Vigencia' }
+        creadaEn: { type: string, format: date-time }
+
+    DatosVenta:
+      type: object
+      additionalProperties: false
+      required: [direccion, municipio, cuotaMensual]
+      properties:
+        direccion: { type: string }
+        municipio: { type: string }
+        cuotaMensual: { type: number }
+
     DocumentoPoliza:
       type: object
       additionalProperties: false

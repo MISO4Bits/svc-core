@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 
 from app.domain import (
+    CuentaClienteYaExiste,
     CuentaInterna,
     CuentaInternaYaExiste,
     IdentidadNoDisponible,
@@ -111,13 +112,32 @@ class IdentityPlatformAdmin:
             raise
         return CuentaInterna(uid=uid, correo=correo, rol=rol, nombre=nombre)
 
+    # --- Cuentas de clientes creadas por un socio (BITS-378) ---
+
+    async def crear_cuenta_cliente(self, correo: str, contrasena: str, nombre: str) -> str:
+        """Cuenta sin rol y con el correo verificado: el cliente entra por la web o la app como
+        cualquier otro. El correo se verifica porque el socio lo captura con el cliente delante
+        y la contraseña temporal solo le llega a esa bandeja."""
+        respuesta = await self._llamar(
+            "accounts",
+            {"email": correo, "password": contrasena, "emailVerified": True, "displayName": nombre},
+        )
+        if respuesta.status_code != 200:
+            if _codigo_de_error(respuesta) == "EMAIL_EXISTS":
+                raise CuentaClienteYaExiste()
+            raise _fallo(respuesta)
+        return respuesta.json()["localId"]
+
+    async def borrar_cuenta(self, uid: str) -> None:
+        await self._borrar_sin_fallar(uid)
+
     async def _borrar_sin_fallar(self, uid: str) -> None:
         try:
             respuesta = await self._llamar("accounts:delete", {"localId": uid})
         except IdentidadNoDisponible:
             respuesta = None
         if respuesta is None or respuesta.status_code != 200:
-            logger.error("no se pudo borrar la cuenta sin rol uid=%s", uid)
+            logger.error("no se pudo borrar la cuenta uid=%s", uid)
 
     async def buscar_por_correo(self, correo: str) -> CuentaInterna | None:
         respuesta = await self._llamar("accounts:lookup", {"email": [correo]})

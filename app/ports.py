@@ -12,6 +12,7 @@ from app.domain import (
     CotizacionActiva,
     CreditosReportados,
     CuentaInterna,
+    DatosCredito,
     Decision,
     Dispositivo,
     DocumentoPoliza,
@@ -50,6 +51,12 @@ class ClienteRepository(Protocol):
     async def existe_por_documento(self, tipo_documento: str, numero_documento: str) -> bool: ...
 
     async def existe_por_correo(self, email: str) -> bool: ...
+
+    async def buscar_por_correo(self, email: str) -> Cliente | None: ...
+
+    async def buscar_por_documento(
+        self, tipo_documento: str, numero_documento: str
+    ) -> Cliente | None: ...
 
     async def confirmar(self, cliente_id: str) -> Cliente | None:
         """Idempotente: si ya estaba confirmado, no toca ``confirmado_en`` de nuevo."""
@@ -108,6 +115,21 @@ class CuentasInternasPort(Protocol):
 
     async def buscar_por_correo(self, correo: str) -> CuentaInterna | None:
         """La cuenta con ese correo, o ``None``. Lanza ``IdentidadNoDisponible`` si falla."""
+        ...
+
+
+@runtime_checkable
+class CuentasClientePort(Protocol):
+    """Cuentas de los clientes en Identity Platform, para la venta directa del socio (BITS-378)."""
+
+    async def crear_cuenta_cliente(self, correo: str, contrasena: str, nombre: str) -> str:
+        """Crea la cuenta con el correo ya verificado y sin rol, y devuelve su ``uid``. Lanza
+        ``CuentaClienteYaExiste`` si el correo está tomado e ``IdentidadNoDisponible`` si el
+        proveedor falla."""
+        ...
+
+    async def borrar_cuenta(self, uid: str) -> None:
+        """Compensa una creación que no se completó. Nunca lanza: si no puede, lo registra."""
         ...
 
 
@@ -200,11 +222,19 @@ class PolizaRepository(Protocol):
         ...
 
     async def emitir(
-        self, poliza_id: str, numero: str, emitida_en: datetime, vigencia: Vigencia
+        self,
+        poliza_id: str,
+        numero: str,
+        emitida_en: datetime,
+        vigencia: Vigencia,
+        *,
+        consumir_evidencias: bool = True,
     ) -> Poliza | None:
         """En una sola operación: pasa a ``EMITIDA`` (solo si sigue ``PENDIENTE``), asigna el
-        número y consume las evidencias vigentes del cliente. Devuelve ``None`` si ya no estaba
-        ``PENDIENTE``; lanza ``NumeroPolizaDuplicado`` si el número ya existe."""
+        número y consume las evidencias vigentes del cliente (salvo ``consumir_evidencias=False``:
+        la venta directa del socio no usa las del cliente, que quedan para su propia solicitud).
+        Devuelve ``None`` si ya no estaba ``PENDIENTE``; lanza ``NumeroPolizaDuplicado`` si el
+        número ya existe."""
         ...
 
     async def aprobar(self, poliza_id: str, decision: Decision) -> bool:
@@ -243,6 +273,19 @@ class CotizacionPort(Protocol):
     async def activa(self, cliente_id: str) -> CotizacionActiva | None:
         """La cotización activa del cliente, o ``None`` si no tiene. Lanza
         ``CotizacionNoDisponible`` si Cotización no responde."""
+        ...
+
+    async def precio(self, edad: int, datos: DatosCredito) -> CotizacionActiva:
+        """El precio de un crédito sin guardar nada (venta directa del socio, BITS-378). Lanza
+        ``CotizacionNoDisponible`` si Cotización no responde o rechaza la consulta."""
+        ...
+
+
+@runtime_checkable
+class DocumentosLegalesPort(Protocol):
+    async def version_vigente(self, tipo: str) -> str:
+        """Versión vigente del documento legal (``V1``). Lanza ``DocumentosLegalesNoDisponibles``
+        si Productos no responde o no hay uno publicado."""
         ...
 
 

@@ -13,6 +13,7 @@ import logging
 import secrets
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from app.domain import (
     MENSAJE_RECHAZO,
@@ -26,9 +27,12 @@ from app.domain import (
     CotizacionCambio,
     CotizacionNoDisponible,
     CotizacionVencida,
+    DatosCredito,
+    DatosVenta,
     Decision,
     DocumentoAceptado,
     DocumentoPoliza,
+    DocumentosLegalesNoDisponibles,
     DomainEvent,
     EstadoCliente,
     EstadoEvidencia,
@@ -68,6 +72,7 @@ from app.ports import (
     CorreosDePolizaPort,
     CotizacionPort,
     DocumentoPolizaPort,
+    DocumentosLegalesPort,
     EventPublisher,
     EvidenciaRepository,
     PolizaRepository,
@@ -77,6 +82,32 @@ logger = logging.getLogger("svc_core.polizas")
 
 DOCUMENTO_DE_POLIZA = "poliza"
 _INTENTOS_NUMERO = 5
+
+# Límites del crédito que se asegura (los mismos de Cotización, BITS-95).
+VALOR_CREDITO_MINIMO = Decimal(10_000_000)
+PLAZO_MAXIMO_MESES = 480
+ENTIDAD_MIN_CARACTERES = 2
+ENTIDAD_MAX_CARACTERES = 80
+TEXTO_VENTA_MAX = 200
+
+
+def validar_datos_credito(datos: DatosCredito) -> None:
+    """Las reglas del crédito que Cotización también exige: se revisan aquí para dar un 400 con el
+    campo y no depender de que Cotización responda."""
+    if datos.valor_credito < VALOR_CREDITO_MINIMO:
+        raise SolicitudPolizaInvalida(
+            "valorCredito", f"El valor del crédito debe ser al menos {VALOR_CREDITO_MINIMO:,}"
+        )
+    if not 1 <= datos.plazo_restante_meses <= PLAZO_MAXIMO_MESES:
+        raise SolicitudPolizaInvalida(
+            "plazoRestanteMeses", f"El plazo debe estar entre 1 y {PLAZO_MAXIMO_MESES} meses"
+        )
+    if not ENTIDAD_MIN_CARACTERES <= len(datos.entidad_acreedora.strip()) <= ENTIDAD_MAX_CARACTERES:
+        raise SolicitudPolizaInvalida(
+            "entidadAcreedora",
+            f"La entidad debe tener entre {ENTIDAD_MIN_CARACTERES} y "
+            f"{ENTIDAD_MAX_CARACTERES} caracteres",
+        )
 
 
 def datos_para_documento(poliza: Poliza, cliente: Cliente | None) -> dict:
@@ -148,11 +179,13 @@ class PolizaService:
         *,
         correos: CorreosDePolizaPort | None = None,
         avisos: AvisosDePolizaPort | None = None,
+        documentos_legales: DocumentosLegalesPort | None = None,
         ahora: Callable[[], datetime] = now_utc,
         aleatorio: Callable[[str], str] = secrets.choice,
     ) -> None:
         self._correos = correos
         self._avisos = avisos
+        self._documentos_legales = documentos_legales
         self._clientes = clientes
         self._evidencias = evidencias
         self._polizas = polizas
@@ -242,6 +275,103 @@ class PolizaService:
         if not poliza.pendientes:
             poliza = await self._emitir(poliza)
         return poliza, True
+
+    # --- venta directa del socio (BITS-378) ---
+
+    async def precio(self, cliente_id: str, datos: DatosCredito) -> CotizacionActiva:
+        """El precio de un crédito para un cliente, sin crear cotización ni solicitud: Cotización
+        no guarda nada y no se publica ``CotizacionCreada``, que borraría la solicitud pendiente
+        que el cliente tenga por su cuenta. La edad sale de la fecha de nacimiento del cliente."""
+        cliente = await self._clientes.obtener(cliente_id)
+        if cliente is None:
+            raise ClienteNoEncontrado(cliente_id)
+        if cliente.estado is not EstadoCliente.ACTIVO:
+            raise ClienteNoActivo(cliente_id)
+        validar_datos_credito(datos)
+        edad = edad_en(cliente.fecha_nacimiento, self._ahora().date())
+        validar_rango_de_edad(edad, datos.plazo_restante_meses)
+        try:
+            return await self._cotizaciones.precio(edad, datos)
+        except CotizacionNoDisponible:
+            raise
+        except Exception as exc:
+            logger.exception("precio de cotización: fallo inesperado")
+            raise CotizacionNoDisponible() from exc
+
+    async def vender(
+        self,
+        *,
+        socio_id: str,
+        cliente_id: str,
+        coberturas: Sequence[CodigoCobertura],
+        datos: DatosCredito,
+        cuota_mensual: Decimal,
+        direccion: str,
+        municipio: str,
+    ) -> Poliza:
+        """Emite al instante la póliza que un socio vende a un cliente.
+
+        No hay solicitud ni pendientes: el socio verificó al cliente cara a cara, el crédito lo
+        aprobó el banco y las condiciones se aceptan en la versión vigente. El precio se calcula
+        de nuevo aquí con la tarifa del momento. Las evidencias de identidad del cliente no se
+        consumen: no se usaron y le sirven a su propia solicitud por la web o la app.
+        """
+        if not socio_id.strip():
+            raise SolicitudPolizaInvalida("socioId", "Falta el socio que vende")
+        direccion = direccion.strip()
+        municipio = municipio.strip()
+        if not direccion or len(direccion) > TEXTO_VENTA_MAX:
+            raise SolicitudPolizaInvalida(
+                "direccion", f"La dirección es obligatoria y tiene hasta {TEXTO_VENTA_MAX} letras"
+            )
+        if not municipio or len(municipio) > TEXTO_VENTA_MAX:
+            raise SolicitudPolizaInvalida(
+                "municipio", f"El municipio es obligatorio y tiene hasta {TEXTO_VENTA_MAX} letras"
+            )
+        if cuota_mensual <= 0:
+            raise SolicitudPolizaInvalida("cuotaMensual", "La cuota mensual debe ser mayor a cero")
+        elegidas = frozenset(coberturas)
+        if CodigoCobertura.VIDA not in elegidas:
+            raise SolicitudPolizaInvalida("coberturas", "La cobertura VIDA es obligatoria")
+
+        cotizacion = await self.precio(cliente_id, datos)
+        disponibles = {c.codigo: c for c in cotizacion.coberturas}
+        faltan = sorted(str(c) for c in elegidas if c not in disponibles)
+        if faltan:
+            raise SolicitudPolizaInvalida("coberturas", f"No hay precio para: {', '.join(faltan)}")
+        if self._documentos_legales is None:
+            raise DocumentosLegalesNoDisponibles()
+        version = await self._documentos_legales.version_vigente(DOCUMENTO_DE_POLIZA)
+
+        ahora = self._ahora()
+        poliza = Poliza(
+            cliente_id=cliente_id,
+            cotizacion_creada_en=cotizacion.creada_en,
+            solicitud_vigente_hasta=cotizacion.vigencia.hasta,
+            coberturas=tuple(disponibles[c] for c in CodigoCobertura if c in elegidas),
+            datos_credito=cotizacion.datos_credito,
+            origen_datos=cotizacion.origen_datos,
+            tasa=cotizacion.tasa,
+            version_tarifa=cotizacion.version_tarifa,
+            cobertura_meses=cotizacion.cobertura_meses,
+            edad=cotizacion.edad,
+            documentos_aceptados=(DocumentoAceptado(DOCUMENTO_DE_POLIZA, version, ahora),),
+            creada_en=ahora,
+            ultima_evaluacion_en=ahora,
+            socio_id=socio_id,
+            datos_venta=DatosVenta(direccion, municipio, cuota_mensual),
+        )
+        try:
+            await self._polizas.crear(poliza)
+        except PolizaYaExiste:
+            raise SolicitudExistente() from None
+        logger.info(
+            "vender: póliza creada cliente_id=%s poliza_id=%s socio_id=%s",
+            sanear_para_log(cliente_id),
+            poliza.id,
+            sanear_para_log(socio_id),
+        )
+        return await self._emitir(poliza, consumir_evidencias=False)
 
     async def obtener(self, cliente_id: str, poliza_id: str) -> Poliza:
         """La póliza de un cliente; si está pendiente, se re-evalúa antes de devolverla."""
@@ -342,13 +472,15 @@ class PolizaService:
             pendientes.append(Pendiente.de(CodigoPendiente.CREDITO_NO_VERIFICADO))
         return tuple(pendientes)
 
-    async def _emitir(self, poliza: Poliza) -> Poliza:
+    async def _emitir(self, poliza: Poliza, *, consumir_evidencias: bool = True) -> Poliza:
         for _ in range(_INTENTOS_NUMERO):
             emitida_en = self._ahora()
             numero = generar_numero_poliza(emitida_en, self._aleatorio)
             vigencia = Vigencia(emitida_en, sumar_meses(emitida_en, poliza.cobertura_meses))
             try:
-                emitida = await self._polizas.emitir(poliza.id, numero, emitida_en, vigencia)
+                emitida = await self._polizas.emitir(
+                    poliza.id, numero, emitida_en, vigencia, consumir_evidencias=consumir_evidencias
+                )
             except NumeroPolizaDuplicado:
                 continue
             if emitida is None:

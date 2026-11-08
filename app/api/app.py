@@ -11,8 +11,10 @@ from fastapi.responses import FileResponse
 from app.adapters.factory import (
     build_avisos,
     build_biometria,
+    build_cuentas_cliente,
     build_cuentas_internas,
     build_dispositivos,
+    build_documentos_legales,
     build_event_publisher,
     build_evidencias,
     build_notificaciones,
@@ -29,6 +31,8 @@ from app.api.routes import router
 from app.api.siniestros import router as siniestros_router
 from app.api.siniestros_internos import router as siniestros_internos_router
 from app.api.usuarios_internos import router as usuarios_internos_router
+from app.api.ventas import router as ventas_router
+from app.clientes_asistidos import ClientesAsistidosService
 from app.config import Settings, get_settings
 from app.cuentas_internas import CuentasInternasService
 from app.dispositivos import DispositivoService
@@ -64,6 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     events = build_event_publisher(settings)
     notificaciones, cerrables = build_notificaciones(settings, events)
     cuentas_internas, cerrables_cuentas = build_cuentas_internas(settings)
+    cuentas_cliente, cerrables_cuentas_cliente = build_cuentas_cliente(settings)
+    documentos_legales, cerrables_legales = build_documentos_legales(settings)
     repo_evidencias, almacen, verificador = build_evidencias(settings)
     repo_polizas, cotizaciones, documentos, cerrables_polizas = build_polizas(
         settings, repo_evidencias
@@ -73,7 +79,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     siniestros, cerrables_siniestros = build_siniestros(
         settings, clientes, repo_polizas, almacen, idempotency, avisos
     )
-    cerrables = [*cerrables, *cerrables_polizas, *cerrables_cuentas, *cerrables_siniestros]
+    cerrables = [
+        *cerrables,
+        *cerrables_polizas,
+        *cerrables_cuentas,
+        *cerrables_cuentas_cliente,
+        *cerrables_legales,
+        *cerrables_siniestros,
+    ]
     polizas = PolizaService(
         clientes,
         repo_evidencias,
@@ -83,12 +96,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events,
         correos=notificaciones,
         avisos=avisos,
+        documentos_legales=documentos_legales,
     )
     dispositivos = DispositivoService(clientes, repo_dispositivos)
     # Si el cliente cumple algo que le faltaba a su póliza pendiente, esta se vuelve a evaluar.
     service = IdentityService(
         clientes, consentimientos, events, al_confirmar=polizas.reevaluar_cliente
     )
+    clientes_asistidos = ClientesAsistidosService(clientes, service, cuentas_cliente)
     biometria = build_biometria(settings)
     evidencias = EvidenciaService(
         clientes,
@@ -170,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.dispositivos = dispositivos
     app.state.cuentas_internas = cuentas_internas
     app.state.siniestros = siniestros
+    app.state.clientes_asistidos = clientes_asistidos
 
     install_error_handlers(app)
     app.include_router(router, prefix="/v1")
@@ -179,6 +195,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(usuarios_internos_router, prefix="/v1")
     app.include_router(siniestros_router, prefix="/v1")
     app.include_router(siniestros_internos_router, prefix="/v1")
+    app.include_router(ventas_router, prefix="/v1")
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:

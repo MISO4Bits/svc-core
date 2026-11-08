@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from app.domain import CuentaInterna, CuentaInternaYaExiste, RolInterno, new_id
+from app.domain import (
+    CuentaClienteYaExiste,
+    CuentaInterna,
+    CuentaInternaYaExiste,
+    IdentidadNoDisponible,
+    RolInterno,
+    new_id,
+)
 
 
 class CuentasInternasEnMemoria:
@@ -22,3 +29,26 @@ class CuentasInternasEnMemoria:
 
     async def buscar_por_correo(self, correo: str) -> CuentaInterna | None:
         return self._por_correo.get(correo)
+
+
+class CuentasClienteEnMemoria:
+    """Cuentas de clientes en memoria: local y pruebas. Guarda la contraseña para poder
+    comprobar qué se le mandó al cliente."""
+
+    def __init__(self, *, caida: bool = False) -> None:
+        self.cuentas: dict[str, tuple[str, str]] = {}  # uid -> (correo, contraseña)
+        self.borradas: list[str] = []
+        self.caida = caida
+
+    async def crear_cuenta_cliente(self, correo: str, contrasena: str, nombre: str) -> str:
+        if self.caida:
+            raise IdentidadNoDisponible()
+        if any(c == correo for c, _ in self.cuentas.values()):
+            raise CuentaClienteYaExiste()
+        uid = new_id()
+        self.cuentas[uid] = (correo, contrasena)
+        return uid
+
+    async def borrar_cuenta(self, uid: str) -> None:
+        self.cuentas.pop(uid, None)
+        self.borradas.append(uid)

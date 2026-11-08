@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     cotizacion_base_url: str = "http://svc-cotizacion.svc-cotizacion.svc.cluster.local"  # NOSONAR
     cotizacion_timeout_s: float = 1.0
     documento_backend: str = "fake"
+    # Versión vigente de las condiciones de la póliza (venta directa del socio, BITS-378): "fake"
+    # (siempre V1) | "http" (Productos, ``productos_base_url``).
+    documentos_legales_backend: str = "fake"
     # Servicio fn-documentos (Cloud Run): su URL sale de Terraform. Se llama con un token de
     # identidad de la cuenta de servicio de Core (la función no es pública).
     documento_base_url: str | None = None

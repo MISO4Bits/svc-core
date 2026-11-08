@@ -10,6 +10,7 @@ class FakePlantillasCorreo:
         enlace = {
             TipoCorreo.VERIFICACION_CORREO: "{{enlaceVerificacion}}",
             TipoCorreo.POLIZA_EMITIDA: "{{numeroPoliza}}",
+            TipoCorreo.CUENTA_ACTIVADA: "{{contrasena}}",
         }.get(tipo, "{{urlWeb}}")
         return PlantillaCorreo(
             tipo=str(tipo),
