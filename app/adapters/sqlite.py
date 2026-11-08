@@ -438,6 +438,12 @@ class SqliteEvidenciaRepository:
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
 
+    async def obtener(self, evidencia_id: str) -> Evidencia | None:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute("SELECT * FROM evidencias WHERE id = ?", (evidencia_id,))
+            row = await cursor.fetchone()
+        return _row_to_evidencia(row) if row else None
+
     async def vigente(self, cliente_id: str, tipo: TipoEvidencia) -> Evidencia | None:
         async with self._db.connect() as conn:
             cursor = await conn.execute(

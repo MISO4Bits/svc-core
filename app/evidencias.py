@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
 from app.domain import (
+    ArchivoNoEncontrado,
     CedulaIncompleta,
     Cliente,
     ClienteNoEncontrado,
@@ -34,6 +35,7 @@ from app.ports import (
 logger = logging.getLogger("svc_core.evidencias")
 
 _EXTENSION = {"image/jpeg": "jpg", "image/png": "png"}
+_CONTENT_TYPE = {extension: tipo for tipo, extension in _EXTENSION.items()}
 _ACEPTADAS = (EstadoEvidencia.ACEPTADA, EstadoEvidencia.REVISION_MANUAL)
 
 
@@ -66,6 +68,19 @@ class EvidenciaService:
         self._biometria_timeout_s = biometria_timeout_s
         # Gancho: la póliza pendiente del cliente se vuelve a evaluar (BITS-101).
         self._al_guardar = al_guardar
+
+    async def imagen(self, evidencia_id: str) -> tuple[bytes, str]:
+        """La imagen guardada y su tipo de contenido, para que el Backoffice la abra al revisar.
+
+        El tipo sale de la extensión de la referencia: la evidencia no guarda el ``content_type``.
+        """
+        evidencia = await self._evidencias.obtener(evidencia_id)
+        if evidencia is None:
+            raise ArchivoNoEncontrado(evidencia_id)
+        extension = evidencia.almacen_ref.rsplit(".", 1)[-1].lower()
+        return await self._almacen.obtener(evidencia.almacen_ref), _CONTENT_TYPE.get(
+            extension, "application/octet-stream"
+        )
 
     async def subir(self, cliente_id: str, tipo: TipoEvidencia, imagen: bytes) -> ResultadoSubida:
         cliente = await self._clientes.obtener(cliente_id)

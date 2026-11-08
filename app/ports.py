@@ -135,6 +135,10 @@ class CuentasClientePort(Protocol):
 
 @runtime_checkable
 class EvidenciaRepository(Protocol):
+    async def obtener(self, evidencia_id: str) -> Evidencia | None:
+        """La evidencia por su id, vigente o no (una consumida por una póliza sigue existiendo)."""
+        ...
+
     async def vigente(self, cliente_id: str, tipo: TipoEvidencia) -> Evidencia | None:
         """Última evidencia del tipo que no fue reemplazada ni consumida por una póliza."""
         ...

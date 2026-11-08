@@ -31,7 +31,13 @@ def _app_operations(app) -> set[tuple[str, str]]:
     ops: set[tuple[str, str]] = set()
     for path, item in app.openapi()["paths"].items():
         if not path.startswith(
-            ("/v1/clientes", "/v1/polizas", "/v1/usuarios-internos", "/v1/siniestros")
+            (
+                "/v1/clientes",
+                "/v1/polizas",
+                "/v1/usuarios-internos",
+                "/v1/siniestros",
+                "/v1/evidencias-identidad",
+            )
         ):
             continue
         for method in item:

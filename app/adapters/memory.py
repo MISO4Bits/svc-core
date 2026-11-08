@@ -133,6 +133,9 @@ class InMemoryEvidenciaRepository:
         self._items: list[Evidencia] = []
         self._rechazos: dict[tuple[str, str], int] = {}
 
+    async def obtener(self, evidencia_id: str) -> Evidencia | None:
+        return next((e for e in self._items if e.id == evidencia_id), None)
+
     async def vigente(self, cliente_id: str, tipo: TipoEvidencia) -> Evidencia | None:
         candidatas = [
             e

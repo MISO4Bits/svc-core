@@ -356,6 +356,34 @@ paths:
               schema: { $ref: '#/components/schemas/EstadoConsentimiento' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
+  /v1/evidencias-identidad/{evidenciaId}/imagen:
+    parameters:
+      - name: evidenciaId
+        in: path
+        required: true
+        description: >-
+          El `evidenciaId` de una evidencia (`evidencias[].evidenciaId` del detalle de la
+          póliza), vigente o ya consumida por una póliza.
+        schema: { type: string, format: uuid }
+    get:
+      operationId: obtenerImagenDeEvidencia
+      tags: [Evidencias de identidad (backoffice)]
+      summary: Devuelve la imagen de una evidencia de identidad
+      description: |
+        Interno, para el Backoffice. La imagen tal como se guardó, para abrirla al revisar una
+        solicitud sin descargarla (`Content-Disposition: inline`). Sin caché. No comprueba a quién
+        pertenece: el BFF verifica que la evidencia sea de la solicitud que se está revisando.
+      responses:
+        '200':
+          description: La imagen.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
   /v1/clientes/{clienteId}/evidencias-identidad:
     parameters:
       - $ref: '#/components/parameters/ClienteId'
