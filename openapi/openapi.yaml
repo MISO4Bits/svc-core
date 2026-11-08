@@ -60,13 +60,15 @@ paths:
       tags: [Clientes]
       summary: Busca un cliente por su identidad, su correo o su documento
       description: |
-        Se busca de una de tres maneras, nunca de varias a la vez (`400` si se mezclan o no llega
-        ninguna):
+        - `identityRef` (el `sub` de Identity Platform), solo: lo usa el BFF para asociar la sesión
+          con el `clienteId` tras el login. No se mezcla con lo demás (`400`).
+        - `correo`, o `tipoDocumento` y `numeroDocumento` juntos, o **los dos a la vez**: el socio
+          busca a quién venderle (BITS-378). El correo no distingue mayúsculas. `400` si no llega
+          ninguno o si el tipo viene sin el número.
 
-        - `identityRef` (el `sub` de Identity Platform): lo usa el BFF para asociar la sesión con
-          el `clienteId` tras el login.
-        - `correo`: el socio busca a quién venderle (BITS-378). No distingue mayúsculas.
-        - `tipoDocumento` y `numeroDocumento`, juntos: lo mismo, por documento.
+        Con correo y documento a la vez deben ser de la misma cuenta: si son de cuentas distintas,
+        o el correo es de una cuenta y el documento no es de nadie, `409 CLIENTES_DISTINTOS` con el
+        campo que choca (`errores[0].campo`). Si solo el documento existe, devuelve esa cuenta.
 
         `404` si no hay ningún cliente con ese dato.
       parameters:
@@ -94,6 +96,11 @@ paths:
               schema: { $ref: '#/components/schemas/Cliente' }
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: El correo y el documento son de cuentas distintas (`codigo = CLIENTES_DISTINTOS`, `errores[0].campo` dice cuál choca).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
     post:
       operationId: registrarCliente
       tags: [Clientes]
@@ -162,8 +169,10 @@ paths:
         crear la cuenta, esta se borra. Con `Idempotency-Key`, un reintento devuelve la respuesta
         original `201` sin crear nada ni mandar otro correo.
 
-        Tras responder, en segundo plano, publica el correo `cuenta-activada` con el correo y la
-        contraseña temporal. La contraseña no vuelve en la respuesta ni se guarda.
+        Tras responder, en segundo plano, publica la **bienvenida** (`bienvenida-venta`) y los datos
+        de acceso (`cuenta-activada`, con el correo y la contraseña temporal). Salen aquí y no con
+        la venta: solo el cliente nuevo los necesita. La contraseña no vuelve en la respuesta ni se
+        guarda.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -636,9 +645,9 @@ paths:
         cliente con `socioId` y `datosVenta`. Acepta las condiciones de la póliza en la versión
         vigente en Productos. **No consume las evidencias de identidad del cliente**.
 
-        Publica `PolizaEmitida` (el documento y su correo salen por el flujo de siempre) y, tras
-        responder, el correo `bienvenida-venta`. Con `Idempotency-Key`, un reintento del mismo
-        socio devuelve la respuesta original `201`.
+        Publica `PolizaEmitida`: el documento, su correo con el PDF y el aviso push salen por el
+        flujo de siempre. No manda ningún otro correo (la bienvenida es del alta del cliente). Con
+        `Idempotency-Key`, un reintento del mismo socio devuelve la respuesta original `201`.
 
         `400` si falta `VIDA` o algún dato, `403 CLIENTE_NO_ACTIVO`, `404` si no existe el
         cliente, `422 FUERA_DE_RANGO`, `503` si Cotización o Productos no responden (no se emite

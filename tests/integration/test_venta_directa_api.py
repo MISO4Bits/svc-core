@@ -76,6 +76,10 @@ def _correos(app) -> dict[str, dict]:
     }
 
 
+def _correos_enviados(app) -> list[str]:
+    return [e.datos["plantilla"] for e in app.state.events.events if e.tipo == "EnviarCorreo"]
+
+
 def _tipos(app) -> list[str]:
     return [e.tipo for e in app.state.events.events]
 
@@ -126,7 +130,9 @@ async def test_la_contrasena_solo_viaja_en_el_correo_de_acceso(app, http):
     contrasena = app.state.clientes_asistidos._cuentas.cuentas[cuerpo["identityRef"]][1]
     assert len(contrasena) >= 12
     correos = _correos(app)
-    assert list(correos) == ["cuenta-activada"]  # el aviso de venta sale al vender, no al alta
+    # La bienvenida y el acceso salen con el alta del cliente nuevo.
+    assert list(correos) == ["bienvenida-venta", "cuenta-activada"]
+    assert correos["bienvenida-venta"]["destinatario"] == "laura.gomez@example.com"
     assert correos["cuenta-activada"]["destinatario"] == "laura.gomez@example.com"
     assert contrasena in correos["cuenta-activada"]["cuerpoHtml"]
     assert contrasena in correos["cuenta-activada"]["cuerpoTexto"]
@@ -147,7 +153,7 @@ async def test_un_correo_o_un_documento_repetido_es_409_y_no_crea_cuenta(app, ht
     assert por_documento.status_code == 409
     assert por_documento.json()["errores"][0]["campo"] == "documento"
     assert len(cuentas) == 1
-    assert len(_correos(app)) == 1
+    assert len(_correos(app)) == 2  # solo los del primer alta
 
 
 async def test_un_correo_ya_tomado_en_identity_platform_es_409_de_correo(app, http):
@@ -181,7 +187,7 @@ async def test_el_reintento_con_la_misma_clave_no_crea_otra_cuenta_ni_otro_corre
     assert repetida.status_code == 201
     assert repetida.json() == primera.json()
     assert len(app.state.clientes_asistidos._cuentas.cuentas) == 1
-    assert len(_correos(app)) == 1
+    assert len(_correos(app)) == 2  # solo los del primer alta
 
 
 async def test_un_cuerpo_incompleto_o_con_campos_de_mas_es_400(http):
@@ -250,11 +256,99 @@ async def test_buscar_sin_dato_o_mezclando_formas_es_400(http):
     assert (await http.get("/v1/clientes", params={"tipoDocumento": "CC"})).status_code == 400
     mezcla = await http.get("/v1/clientes", params={"correo": "a@b.co", "identityRef": "x"})
     assert mezcla.status_code == 400
-    doble = await http.get(
+    sin_numero = await http.get("/v1/clientes", params={"correo": "a@b.co", "tipoDocumento": "CC"})
+    assert sin_numero.status_code == 400
+    con_identity_ref = await http.get(
         "/v1/clientes",
-        params={"correo": "a@b.co", "tipoDocumento": "CC", "numeroDocumento": "1234"},
+        params={"identityRef": "x", "tipoDocumento": "CC", "numeroDocumento": "1234"},
     )
-    assert doble.status_code == 400
+    assert con_identity_ref.status_code == 400
+
+
+async def test_buscar_con_correo_y_documento_de_la_misma_cuenta(http):
+    creado = (await _asistido(http)).json()
+
+    respuesta = await http.get(
+        "/v1/clientes",
+        params={
+            "correo": "laura.gomez@example.com",
+            "tipoDocumento": "CC",
+            "numeroDocumento": "52123456",
+        },
+    )
+
+    assert respuesta.status_code == 200
+    assert respuesta.json()["id"] == creado["id"]
+
+
+async def test_buscar_con_correo_y_documento_de_cuentas_distintas_es_409(http, openapi_spec):
+    await _asistido(http)
+    await _asistido(
+        http,
+        numeroDocumento="80999888",
+        email="sofia.r@example.com",
+        primerNombre="Sofía",
+        primerApellido="Restrepo",
+    )
+
+    respuesta = await http.get(
+        "/v1/clientes",
+        params={
+            "correo": "sofia.r@example.com",
+            "tipoDocumento": "CC",
+            "numeroDocumento": "52123456",
+        },
+    )
+
+    assert respuesta.status_code == 409
+    _validar(openapi_spec, "Problema", respuesta.json())
+    assert respuesta.json()["codigo"] == "CLIENTES_DISTINTOS"
+    assert respuesta.json()["errores"][0]["campo"] == "correo"
+
+
+async def test_buscar_con_un_correo_ajeno_y_un_documento_que_no_existe_es_409(http):
+    await _asistido(http)
+
+    respuesta = await http.get(
+        "/v1/clientes",
+        params={
+            "correo": "laura.gomez@example.com",
+            "tipoDocumento": "CC",
+            "numeroDocumento": "11111111",
+        },
+    )
+
+    assert respuesta.status_code == 409
+    assert respuesta.json()["errores"][0]["campo"] == "documento"
+
+
+async def test_buscar_con_documento_conocido_y_correo_desconocido_devuelve_la_cuenta(http):
+    creado = (await _asistido(http)).json()
+
+    respuesta = await http.get(
+        "/v1/clientes",
+        params={
+            "correo": "otro.correo@example.com",
+            "tipoDocumento": "CC",
+            "numeroDocumento": "52123456",
+        },
+    )
+
+    assert respuesta.status_code == 200
+    assert respuesta.json()["id"] == creado["id"]
+
+
+async def test_buscar_con_correo_y_documento_que_no_existen_es_404(http):
+    respuesta = await http.get(
+        "/v1/clientes",
+        params={
+            "correo": "nadie@example.com",
+            "tipoDocumento": "CC",
+            "numeroDocumento": "11111111",
+        },
+    )
+
+    assert respuesta.status_code == 404
 
 
 async def test_buscar_por_identity_ref_sigue_igual(http):
@@ -402,7 +496,28 @@ async def test_la_venta_publica_la_poliza_emitida_y_avisa_al_cliente(app, http):
     assert len(emitida) == 1
     assert emitida[0].datos["polizaId"] == cuerpo["polizaId"]
     assert emitida[0].datos["asegurado"]["email"] == "laura.gomez@example.com"
-    assert _correos(app)["bienvenida-venta"]["destinatario"] == "laura.gomez@example.com"
+
+
+async def test_la_venta_no_manda_bienvenida_ni_acceso_a_un_cliente_que_ya_existia(app, http):
+    cliente_id = await _registrar(http)  # se registró por su cuenta
+    antes = len(_correos_enviados(app))
+
+    respuesta = await _vender(http, cliente_id)
+
+    assert respuesta.status_code == 201
+    # Se entera de la venta por el correo de la póliza y el aviso push, no por una bienvenida.
+    assert len(_correos_enviados(app)) == antes
+    assert "PolizaEmitida" in _tipos(app)
+
+
+async def test_vender_a_un_cliente_recien_dado_de_alta_no_repite_la_bienvenida(app, http):
+    cliente_id = (await _asistido(http)).json()["id"]
+    antes = _correos_enviados(app)
+
+    await _vender(http, cliente_id)
+
+    assert antes == ["bienvenida-venta", "cuenta-activada"]
+    assert _correos_enviados(app) == antes
 
 
 async def test_la_venta_acepta_las_condiciones_en_la_version_vigente(app, http):
@@ -501,9 +616,7 @@ async def test_el_reintento_con_la_misma_clave_devuelve_la_misma_venta(app, http
     assert repetida.json() == primera.json()
     assert len((await http.get(f"/v1/clientes/{cliente_id}/polizas")).json()) == 1
     assert _tipos(app).count("PolizaEmitida") == 1
-    assert [
-        e.datos["plantilla"] for e in app.state.events.events if e.tipo == "EnviarCorreo"
-    ].count("bienvenida-venta") == 1
+    assert _correos_enviados(app) == ["bienvenida-venta", "cuenta-activada"]
 
 
 async def test_la_misma_clave_de_otro_socio_no_devuelve_la_venta_ajena(http):

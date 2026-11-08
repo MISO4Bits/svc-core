@@ -227,6 +227,14 @@ class CorreoDesechable(DomainError):
         self.email = email
 
 
+class ClientesDistintos(DomainError):
+    """El correo y el documento de la búsqueda no son de la misma cuenta (venta directa)."""
+
+    def __init__(self, campo: str) -> None:
+        super().__init__("El correo y el documento son de cuentas distintas")
+        self.campo = campo
+
+
 class ClienteNoEncontrado(DomainError):
     def __init__(self, cliente_id: str) -> None:
         super().__init__(f"Cliente {cliente_id} no encontrado")

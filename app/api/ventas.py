@@ -83,14 +83,15 @@ async def crear_cliente_asistido(
     out = ClienteOut.model_validate(cliente)
     response.headers["Location"] = f"/v1/clientes/{cliente.id}"
 
-    # Los datos de acceso salen después de responder y sin afectar el alta. La contraseña solo
-    # viaja a la tarea: no se devuelve, no se guarda con la clave de idempotencia ni se registra.
+    # La bienvenida y los datos de acceso salen después de responder y sin afectar el alta. La
+    # contraseña solo viaja a la tarea: no se devuelve, no se guarda con la clave de idempotencia
+    # ni se registra.
     notificaciones = request.app.state.notificaciones
     if notificaciones is not None:
         background.add_task(
             ejecutar_con_contexto,
             otel_context.get_current(),
-            notificaciones.enviar_cuenta_activada,
+            notificaciones.enviar_correos_de_alta,
             cliente,
             contrasena,
         )
@@ -151,8 +152,6 @@ async def calcular_precio(payload: PrecioPolizaRequest, service: PolizasDep) -> 
 )
 async def vender_poliza(
     payload: VenderPolizaRequest,
-    request: Request,
-    background: BackgroundTasks,
     service: PolizasDep,
     idempotency: IdempotencyDep,
     response: Response,
@@ -183,15 +182,8 @@ async def vender_poliza(
     out = await _a_poliza_interna_out(service, poliza)
     response.headers["Location"] = f"/v1/polizas/{poliza.id}"
 
-    notificaciones = request.app.state.notificaciones
-    if notificaciones is not None:
-        cliente = await request.app.state.service.obtener_cliente(poliza.cliente_id)
-        background.add_task(
-            ejecutar_con_contexto,
-            otel_context.get_current(),
-            notificaciones.enviar_bienvenida_venta,
-            cliente,
-        )
+    # Sin correo propio: la póliza le llega al cliente por el flujo de siempre (PolizaEmitida →
+    # documento → correo con el PDF) y por el aviso push. La bienvenida es del alta.
     if clave:
         await idempotency.put(
             clave,

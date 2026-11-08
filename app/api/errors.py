@@ -12,6 +12,7 @@ from app.domain import (
     ArchivoNoEncontrado,
     ClienteNoActivo,
     ClienteNoEncontrado,
+    ClientesDistintos,
     ClienteYaExiste,
     ConflictoPoliza,
     ConflictoSiniestro,
@@ -74,6 +75,17 @@ def install_error_handlers(app: FastAPI) -> None:
             "El cliente ya existe",
             detail=str(exc),
             instance=str(request.url),
+            errores=[{"campo": exc.campo, "mensaje": str(exc)}],
+        )
+
+    @app.exception_handler(ClientesDistintos)
+    async def _clientes_distintos(request: Request, exc: ClientesDistintos) -> JSONResponse:
+        return problema(
+            409,
+            "El correo y el documento son de cuentas distintas",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo="CLIENTES_DISTINTOS",
             errores=[{"campo": exc.campo, "mensaje": str(exc)}],
         )
 

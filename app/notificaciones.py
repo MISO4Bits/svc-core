@@ -112,22 +112,22 @@ class NotificacionService:
         enlace = con_parametro(self._url_verificacion, "oobCode", codigo)
         return {**self._variables_base(cliente), "enlaceVerificacion": enlace}
 
-    async def enviar_cuenta_activada(self, cliente: Cliente, contrasena: str) -> None:
-        """Datos de acceso de un cliente que dio de alta un socio (BITS-379). La contraseña
-        temporal solo viaja como variable de esta plantilla: no se registra ni se guarda. Corre
-        fuera de la petición y un fallo solo se registra."""
-        await self._enviar_de_venta(
+    async def enviar_correos_de_alta(self, cliente: Cliente, contrasena: str) -> None:
+        """Bienvenida y datos de acceso de un cliente que dio de alta un socio (BITS-379).
+
+        Salen con el alta y no con la venta: solo el cliente nuevo los necesita; uno que ya tenía
+        cuenta se entera de la venta por el correo de la póliza. Cada correo va por su lado, como
+        en el registro: si uno falla, el otro sale. La contraseña temporal solo viaja como
+        variable de ``cuenta-activada``: no se registra ni se guarda.
+        """
+        await self._enviar_de_alta(cliente, TipoCorreo.BIENVENIDA_VENTA, {"urlWeb": self._url_web})
+        await self._enviar_de_alta(
             cliente,
             TipoCorreo.CUENTA_ACTIVADA,
             {"correo": cliente.email, "contrasena": contrasena, "urlWeb": self._url_web},
         )
 
-    async def enviar_bienvenida_venta(self, cliente: Cliente) -> None:
-        """Aviso al cliente de que un socio le contrató el seguro (BITS-379). La póliza le llega
-        en su propio correo, cuando el documento está listo."""
-        await self._enviar_de_venta(cliente, TipoCorreo.BIENVENIDA_VENTA, {"urlWeb": self._url_web})
-
-    async def _enviar_de_venta(
+    async def _enviar_de_alta(
         self, cliente: Cliente, tipo: TipoCorreo, variables_extra: dict[str, str]
     ) -> None:
         with tracer.start_as_current_span(
@@ -139,7 +139,7 @@ class NotificacionService:
                 )
             except NotificacionError as exc:
                 logger.warning("correo no enviado plantilla=%s motivo=%s", tipo, exc)
-            except Exception as exc:  # noqa: BLE001 - la venta ya se hizo
+            except Exception as exc:  # noqa: BLE001 - el alta ya se hizo
                 # Solo el tipo del error: el detalle podría traer la contraseña.
                 logger.warning("correo no enviado plantilla=%s (%s)", tipo, type(exc).__name__)
 

@@ -17,6 +17,7 @@ from app.domain import (
     Canal,
     Cliente,
     ClienteNoEncontrado,
+    ClientesDistintos,
     ClienteYaExiste,
     CuentaClienteYaExiste,
     IdentidadNoDisponible,
@@ -64,23 +65,41 @@ class ClientesAsistidosService:
         tipo_documento: TipoDocumento | None,
         numero_documento: str | None,
     ) -> Cliente:
-        """Busca por correo o por tipo y número de documento (uno u otro, no los dos)."""
-        if correo is not None and (tipo_documento is not None or numero_documento is not None):
+        """Busca por correo, por tipo y número de documento, o por los dos a la vez.
+
+        Con los dos, deben ser de la misma cuenta: si son de cuentas distintas, o uno es de una
+        cuenta y el otro no existe como cliente, ``ClientesDistintos`` (409) con el campo que
+        choca. Así el socio no le vende a otra persona por un correo mal escrito.
+        """
+        por_documento = tipo_documento is not None and numero_documento is not None
+        if (tipo_documento is None) != (numero_documento is None):
             raise SolicitudPolizaInvalida(
-                "correo", "Busca por correo o por documento, no por los dos a la vez"
+                "numeroDocumento", "El tipo y el número de documento van juntos"
             )
-        if correo is not None:
-            cliente = await self._clientes.buscar_por_correo(correo.strip())
-            referencia = "el correo indicado"
-        elif tipo_documento is not None and numero_documento is not None:
-            cliente = await self._clientes.buscar_por_documento(tipo_documento, numero_documento)
-            referencia = "el documento indicado"
-        else:
+        if correo is None and not por_documento:
             raise SolicitudPolizaInvalida(
                 "correo", "Indica el correo, o el tipo y el número de documento"
             )
+        del_correo = await self._clientes.buscar_por_correo(correo.strip()) if correo else None
+        del_documento = (
+            await self._clientes.buscar_por_documento(tipo_documento, numero_documento)
+            if por_documento
+            else None
+        )
+        if correo is not None and por_documento:
+            if del_documento is not None and del_correo is not None:
+                if del_documento.id != del_correo.id:
+                    raise ClientesDistintos("correo")
+                return del_documento
+            if del_documento is not None:
+                return del_documento
+            if del_correo is not None:
+                # El correo es de otra persona: no se le vende por un documento que no es suyo.
+                raise ClientesDistintos("documento")
+            raise ClienteNoEncontrado("los datos indicados")
+        cliente = del_correo if correo is not None else del_documento
         if cliente is None:
-            raise ClienteNoEncontrado(referencia)
+            raise ClienteNoEncontrado("el correo indicado" if correo else "el documento indicado")
         return cliente
 
     async def crear(

@@ -641,7 +641,7 @@ async def test_dos_ventas_del_mismo_precio_a_la_vez_dejan_una_sola():
 # --- correos de la venta ---
 
 
-async def test_un_error_inesperado_al_preparar_el_correo_no_rompe_la_venta(caplog):
+async def test_un_error_inesperado_al_preparar_el_correo_no_rompe_el_alta(caplog):
     from app.adapters.memory import InMemoryEventPublisher
     from tests.unit.test_notificaciones import _cliente as cliente_de_prueba
     from tests.unit.test_notificaciones import _servicio as notificaciones
@@ -652,8 +652,7 @@ async def test_un_error_inesperado_al_preparar_el_correo_no_rompe_la_venta(caplo
 
     servicio = notificaciones(InMemoryEventPublisher(), plantillas=Rota())
 
-    await servicio.enviar_cuenta_activada(cliente_de_prueba(), "clave-secreta-en-el-detalle")
-    await servicio.enviar_bienvenida_venta(cliente_de_prueba())
+    await servicio.enviar_correos_de_alta(cliente_de_prueba(), "clave-secreta-en-el-detalle")
 
     assert "clave-secreta-en-el-detalle" not in caplog.text
     assert "RuntimeError" in caplog.text
