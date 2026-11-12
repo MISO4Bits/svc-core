@@ -861,6 +861,43 @@ class DecisionSiniestro:
     motivo: str | None = None  # lo que ve el cliente, en RECHAZAR
 
 
+class OrigenAsistencia(StrEnum):
+    """De dónde sale el punto al que va el prestador: las fotos del siniestro, el teléfono o una
+    dirección que escribe el cliente (con su localidad)."""
+
+    FOTOS = "FOTOS"
+    TELEFONO = "TELEFONO"
+    DIRECCION = "DIRECCION"
+
+
+@dataclass(frozen=True)
+class PrestadorAsistencia:
+    """Los datos del prestador elegido, tal como los mandó la app (BITS-385): el catálogo vive en
+    svc-productos y aquí solo se guarda lo que el cliente vio al pedir la ayuda."""
+
+    id: str
+    nombre: str
+    direccion: str
+    tiempo_llegada_min: int
+
+
+@dataclass(frozen=True)
+class Asistencia:
+    """Una solicitud de ayuda en sitio. Cuelga del siniestro y no cambia su estado ni su plazo.
+    ``numero`` es lo que ve el cliente en la confirmación (``ASI-AAAA-XXXXXX``)."""
+
+    numero: str
+    tipo: str
+    prestador: PrestadorAsistencia
+    origen: OrigenAsistencia
+    solicitada_en: datetime
+    latitud: float | None = None
+    longitud: float | None = None
+    direccion: str | None = None
+    localidad: str | None = None
+    id: str = field(default_factory=new_id)
+
+
 @dataclass(frozen=True)
 class EvidenciaPedida:
     """Lo que el ``ADMIN`` escribió al pedir más evidencia, tal como lo ve el cliente."""
@@ -939,6 +976,8 @@ class Siniestro:
     # ``{fecha, municipio, magnitud}``.
     automatico: bool = False
     evento: dict | None = None
+    # Solicitudes de ayuda en sitio (BITS-385): solo Tu casa y solo con el siniestro en curso.
+    asistencias: tuple[Asistencia, ...] = ()
 
     @property
     def fecha_limite(self) -> datetime | None:
@@ -1040,6 +1079,17 @@ class NumeroSiniestroDuplicado(DomainError):
     """El radicado generado ya lo tiene otro siniestro; el servicio genera otro."""
 
 
+class AyudaNoDisponible(ConflictoSiniestro):
+    """La ayuda en sitio es de Tu casa: un siniestro de incapacidad total o el pago automático por
+    sismo no la tienen."""
+
+    codigo = "AYUDA_NO_DISPONIBLE"
+
+    def __init__(self, tipo: TipoSiniestro) -> None:
+        super().__init__(f"Un siniestro de {tipo} no tiene ayuda en sitio")
+        self.tipo = tipo
+
+
 class ArchivoNoEncontrado(DomainError):
     def __init__(self, archivo_id: str) -> None:
         super().__init__(f"Archivo {archivo_id} no encontrado")
@@ -1067,6 +1117,12 @@ class CreditosReportados:
 
     estado: str
     hipotecas: tuple[HipotecaReportada, ...] = ()
+
+
+def generar_numero_asistencia(solicitada_en: datetime, aleatorio: Callable[[str], str]) -> str:
+    """``ASI-AAAA-XXXXXX``: lo que ve el cliente al confirmar su solicitud de ayuda."""
+    sufijo = "".join(aleatorio(ALFABETO_NUMERO_POLIZA) for _ in range(6))
+    return f"ASI-{solicitada_en.year}-{sufijo}"
 
 
 def generar_numero_siniestro(reportado_en: datetime, aleatorio: Callable[[str], str]) -> str:

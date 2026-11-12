@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from app.domain import (
     ESTADOS_EN_CURSO,
+    Asistencia,
     Cliente,
     Consentimiento,
     ConsentimientoScope,
@@ -427,6 +428,13 @@ class InMemorySiniestroRepository:
         ]
         ordenados = sorted(coinciden, key=lambda x: (-x.reportado_en.timestamp(), x.id))
         return [replace(x) for x in ordenados]
+
+    async def agregar_asistencia(self, siniestro_id: str, asistencia: Asistencia) -> bool:
+        actual = self._items.get(siniestro_id)
+        if actual is None or actual.estado not in ESTADOS_EN_CURSO:
+            return False
+        self._items[siniestro_id] = replace(actual, asistencias=(*actual.asistencias, asistencia))
+        return True
 
     async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
         actual = self._items.get(siniestro.id)

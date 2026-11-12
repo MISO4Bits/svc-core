@@ -17,9 +17,12 @@ from decimal import Decimal
 
 from app.avisos import Aviso, AvisoService, ruta_seguro
 from app.domain import (
+    ESTADOS_EN_CURSO,
     MAX_ARCHIVOS_SINIESTRO,
     ArchivoNoEncontrado,
     ArchivoSiniestro,
+    Asistencia,
+    AyudaNoDisponible,
     BeneficiarioPago,
     ClaseArchivo,
     ClienteNoEncontrado,
@@ -30,10 +33,12 @@ from app.domain import (
     FueraDeVigencia,
     LineaPago,
     NumeroSiniestroDuplicado,
+    OrigenAsistencia,
     OrigenSaldo,
     Pago,
     Poliza,
     PolizaNoEncontrada,
+    PrestadorAsistencia,
     SaldoCredito,
     Siniestro,
     SiniestroEnCurso,
@@ -44,6 +49,7 @@ from app.domain import (
     TipoSiniestro,
     TransicionInvalida,
     ValorSuperaSumaAsegurada,
+    generar_numero_asistencia,
     generar_numero_siniestro,
     new_id,
     now_utc,
@@ -84,6 +90,19 @@ class ArchivoEntrada:
     capturado_en: datetime | None = None
     latitud: float | None = None
     longitud: float | None = None
+
+
+@dataclass(frozen=True)
+class AsistenciaEntrada:
+    """Lo que la app manda al pedir ayuda: el tipo, el prestador elegido y el punto al que va."""
+
+    tipo: str
+    prestador: PrestadorAsistencia
+    origen: OrigenAsistencia
+    latitud: float | None = None
+    longitud: float | None = None
+    direccion: str | None = None
+    localidad: str | None = None
 
 
 @dataclass(frozen=True)
@@ -373,6 +392,65 @@ class SiniestroService:
                 aviso,
                 type(exc).__name__,
             )
+
+    async def pedir_ayuda(
+        self,
+        cliente_id: str,
+        siniestro_id: str,
+        entrada: AsistenciaEntrada,
+        idempotency_key: str | None = None,
+    ) -> Asistencia:
+        """Registra la solicitud de ayuda en sitio con los datos del prestador que eligió el
+        cliente. Solo Tu casa y solo con el siniestro en curso. No cambia el estado, no mueve el
+        plazo y no avisa a nadie. Idempotente con ``idempotency_key``: repetirla devuelve la misma
+        solicitud."""
+        clave = (
+            f"siniestro-asistencia:{cliente_id}:{siniestro_id}:{idempotency_key}"
+            if idempotency_key
+            else None
+        )
+        siniestro = await self.obtener(cliente_id, siniestro_id)
+        if clave is not None:
+            previa = await self._idempotency.get(clave)
+            repetida = (
+                next((a for a in siniestro.asistencias if a.id == previa["asistenciaId"]), None)
+                if previa
+                else None
+            )
+            if repetida is not None:
+                logger.info("ayuda repetida siniestro_id=%s", sanear_para_log(siniestro_id))
+                return repetida
+        if siniestro.tipo is not TipoSiniestro.INCENDIO_TERREMOTO:
+            raise AyudaNoDisponible(siniestro.tipo)
+        if siniestro.estado not in ESTADOS_EN_CURSO:
+            raise TransicionInvalida(siniestro.estado)
+
+        ahora = self._ahora()
+        asistencia = Asistencia(
+            numero=generar_numero_asistencia(ahora, self._aleatorio),
+            tipo=entrada.tipo,
+            prestador=entrada.prestador,
+            origen=entrada.origen,
+            solicitada_en=ahora,
+            latitud=entrada.latitud,
+            longitud=entrada.longitud,
+            direccion=entrada.direccion,
+            localidad=entrada.localidad,
+        )
+        if not await self._siniestros.agregar_asistencia(siniestro.id, asistencia):
+            # Otra acción cerró el siniestro (se pagó o se rechazó) mientras tanto.
+            actual = await self.obtener(cliente_id, siniestro_id)
+            raise TransicionInvalida(actual.estado)
+        if clave is not None:
+            await self._idempotency.put(clave, {"asistenciaId": asistencia.id})
+        logger.info(
+            "ayuda solicitada siniestro_id=%s cliente_id=%s tipo=%s origen=%s",
+            siniestro.id,
+            sanear_para_log(cliente_id),
+            entrada.tipo,
+            entrada.origen,
+        )
+        return asistencia
 
     async def _siniestro_o_404(self, siniestro_id: str) -> Siniestro:
         siniestro = await self._siniestros.obtener(siniestro_id)

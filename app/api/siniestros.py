@@ -15,15 +15,17 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
 
 from app.api.schemas import (
+    AsistenciaOut,
     EntregarEvidenciasDatos,
+    PedirAyudaRequest,
     ReportarSiniestroDatos,
     SiniestroOut,
     SiniestroReportadoOut,
     SiniestroResumenOut,
 )
-from app.domain import SolicitudSiniestroInvalida
+from app.domain import PrestadorAsistencia, SolicitudSiniestroInvalida
 from app.logging_utils import sanear_para_log
-from app.siniestros import ArchivoEntrada, ReporteSiniestro, SiniestroService
+from app.siniestros import ArchivoEntrada, AsistenciaEntrada, ReporteSiniestro, SiniestroService
 
 logger = logging.getLogger("svc_core.api")
 router = APIRouter()
@@ -173,3 +175,48 @@ async def entregar_evidencias(
     )
     response.headers["Cache-Control"] = "no-store"
     return SiniestroOut.model_validate(siniestro)
+
+
+@router.post(
+    "/clientes/{cliente_id}/siniestros/{siniestro_id}/asistencias",
+    response_model=AsistenciaOut,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Siniestros"],
+)
+async def pedir_ayuda(
+    cliente_id: str,
+    siniestro_id: str,
+    payload: PedirAyudaRequest,
+    servicio: SiniestrosDep,
+    response: Response,
+    idempotency_key: LlaveDeIdempotencia = None,
+) -> AsistenciaOut:
+    # La ubicación y la dirección del cliente no se escriben en el log.
+    logger.info(
+        "POST /v1/clientes/%s/siniestros/%s/asistencias: solicitud recibida tipo=%s origen=%s",
+        sanear_para_log(cliente_id),
+        sanear_para_log(siniestro_id),
+        payload.tipo,
+        payload.origen,
+    )
+    asistencia = await servicio.pedir_ayuda(
+        cliente_id,
+        siniestro_id,
+        AsistenciaEntrada(
+            tipo=payload.tipo,
+            prestador=PrestadorAsistencia(
+                id=payload.prestador.id,
+                nombre=payload.prestador.nombre,
+                direccion=payload.prestador.direccion,
+                tiempo_llegada_min=payload.prestador.tiempo_llegada_min,
+            ),
+            origen=payload.origen,
+            latitud=payload.latitud,
+            longitud=payload.longitud,
+            direccion=payload.direccion,
+            localidad=payload.localidad,
+        ),
+        idempotency_key,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return AsistenciaOut.desde_dominio(asistencia)

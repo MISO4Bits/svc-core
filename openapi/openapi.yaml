@@ -1087,6 +1087,52 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problema' }
 
+  /v1/clientes/{clienteId}/siniestros/{siniestroId}/asistencias:
+    parameters:
+      - $ref: '#/components/parameters/ClienteId'
+      - $ref: '#/components/parameters/SiniestroId'
+    post:
+      operationId: pedirAyudaEnSitio
+      tags: [Siniestros]
+      summary: Pide ayuda en sitio para la casa dañada
+      description: |
+        Solo en un siniestro de `INCENDIO_TERREMOTO` que esté `EN_ESTUDIO` o `FALTA_INFORMACION`.
+        La app manda los datos del prestador que el cliente eligió en el catálogo de svc-productos y
+        el punto al que va, y aquí se guardan tal cual, dentro del siniestro (`asistencias`). El
+        punto es `FOTOS` o `TELEFONO` (con `latitud` y `longitud`) o `DIRECCION` (con `direccion` y
+        `localidad`); no se compara el GPS con ninguna dirección.
+
+        No cambia el estado del siniestro, no mueve su plazo y no avisa a nadie. Idempotente con
+        `Idempotency-Key`: repetir la solicitud devuelve la misma.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PedirAyudaRequest' }
+      responses:
+        '201':
+          description: Ayuda solicitada.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asistencia' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: |
+            `AYUDA_NO_DISPONIBLE`: el siniestro no es de incendio o terremoto. `ESTADO_NO_PERMITE`:
+            ya está `PAGADO` o `RECHAZADO`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemaSiniestro' }
+
   /v1/siniestros:
     get:
       operationId: listarBandejaDeSiniestros
@@ -2328,6 +2374,7 @@ components:
               - SINIESTRO_EN_CURSO
               - TIPO_NO_CUBIERTO
               - ESTADO_NO_PERMITE
+              - AYUDA_NO_DISPONIBLE
               - VALOR_SUPERA_SUMA_ASEGURADA
 
     EntregarEvidenciasDatos:
@@ -2461,6 +2508,56 @@ components:
             - { $ref: '#/components/schemas/EventoSismo' }
             - { type: 'null' }
           description: Solo en el paramétrico.
+        asistencias:
+          type: array
+          items: { $ref: '#/components/schemas/Asistencia' }
+          description: Las solicitudes de ayuda en sitio, de la más antigua a la más reciente.
+
+    PrestadorAsistencia:
+      type: object
+      additionalProperties: false
+      required: [id, nombre, direccion, tiempoLlegadaMin]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 40 }
+        nombre: { type: string, minLength: 1, maxLength: 120 }
+        direccion: { type: string, minLength: 1, maxLength: 200 }
+        tiempoLlegadaMin: { type: integer, minimum: 1, maximum: 1440 }
+
+    PedirAyudaRequest:
+      type: object
+      additionalProperties: false
+      required: [tipo, prestador, origen]
+      description: |
+        `FOTOS` y `TELEFONO` llevan `latitud` y `longitud`; `DIRECCION` lleva `direccion` y
+        `localidad`. Mezclarlos es `400`.
+      properties:
+        tipo:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{0,39}$'
+          description: El id del tipo de ayuda (`tiposAyuda` del catálogo), p. ej. `plomeria`.
+        prestador: { $ref: '#/components/schemas/PrestadorAsistencia' }
+        origen: { type: string, enum: [FOTOS, TELEFONO, DIRECCION] }
+        latitud: { type: number, minimum: -90, maximum: 90 }
+        longitud: { type: number, minimum: -180, maximum: 180 }
+        direccion: { type: string, minLength: 1, maxLength: 200 }
+        localidad: { type: string, minLength: 1, maxLength: 60 }
+
+    Asistencia:
+      type: object
+      additionalProperties: false
+      required: [id, numero, tipo, prestador, tiempoLlegadaMin, origen, solicitadaEn]
+      properties:
+        id: { type: string, format: uuid }
+        numero: { type: string, examples: [ASI-2026-K7M2Q9] }
+        tipo: { type: string }
+        prestador: { $ref: '#/components/schemas/PrestadorAsistencia' }
+        tiempoLlegadaMin: { type: integer, minimum: 1 }
+        origen: { type: string, enum: [FOTOS, TELEFONO, DIRECCION] }
+        latitud: { type: [number, 'null'] }
+        longitud: { type: [number, 'null'] }
+        direccion: { type: [string, 'null'] }
+        localidad: { type: [string, 'null'] }
+        solicitadaEn: { type: string, format: date-time }
 
     DecidirSiniestroRequest:
       type: object
@@ -2592,3 +2689,6 @@ components:
         decisiones:
           type: array
           items: { $ref: '#/components/schemas/DecisionSiniestro' }
+        asistencias:
+          type: array
+          items: { $ref: '#/components/schemas/Asistencia' }

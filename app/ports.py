@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from app.domain import (
+    Asistencia,
     Cliente,
     Consentimiento,
     ConsentimientoScope,
@@ -358,6 +359,12 @@ class SiniestroRepository(Protocol):
     ) -> list[Siniestro]:
         """Los de todos los clientes (la bandeja del ``ADMIN``), con los filtros que lleguen, del
         más reciente al más antiguo. Quien llama los ordena por plazo."""
+        ...
+
+    async def agregar_asistencia(self, siniestro_id: str, asistencia: Asistencia) -> bool:
+        """Suma la solicitud de ayuda al siniestro solo si sigue ``EN_ESTUDIO`` o
+        ``FALTA_INFORMACION``, en la misma operación. Devuelve ``False`` si ya no está en curso
+        (otra acción lo cerró antes). No toca el estado ni el plazo."""
         ...
 
     async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
