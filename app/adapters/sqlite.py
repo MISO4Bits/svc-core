@@ -18,6 +18,7 @@ import aiosqlite
 from app.domain import (
     ESTADOS_EN_CURSO,
     ArchivoSiniestro,
+    Asistencia,
     BeneficiarioPago,
     Canal,
     ClaseArchivo,
@@ -48,6 +49,7 @@ from app.domain import (
     MotivoRechazoPoliza,
     NumeroPolizaDuplicado,
     NumeroSiniestroDuplicado,
+    OrigenAsistencia,
     OrigenDatos,
     OrigenSaldo,
     PaginaPolizas,
@@ -56,6 +58,7 @@ from app.domain import (
     PlataformaDispositivo,
     Poliza,
     PolizaYaExiste,
+    PrestadorAsistencia,
     SaldoCredito,
     Siniestro,
     SiniestroEnCurso,
@@ -1181,7 +1184,8 @@ CREATE TABLE IF NOT EXISTS siniestros (
     pago TEXT,
     automatico INTEGER NOT NULL DEFAULT 0,
     evento TEXT,
-    decisiones TEXT NOT NULL DEFAULT '[]'
+    decisiones TEXT NOT NULL DEFAULT '[]',
+    asistencias TEXT NOT NULL DEFAULT '[]'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_numero ON siniestros (numero);
 -- Un siniestro en curso por póliza y cobertura: la base lo garantiza aunque lleguen dos reportes
@@ -1199,12 +1203,14 @@ _MIGRACION_SINIESTROS = (
     "ALTER TABLE siniestros ADD COLUMN automatico INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE siniestros ADD COLUMN evento TEXT",
     "ALTER TABLE siniestros ADD COLUMN decisiones TEXT NOT NULL DEFAULT '[]'",
+    # BITS-385: las solicitudes de ayuda en sitio.
+    "ALTER TABLE siniestros ADD COLUMN asistencias TEXT NOT NULL DEFAULT '[]'",
 )
 
 _COLUMNAS_SINIESTRO = (
     "id, numero, cliente_id, poliza_id, tipo, estado, fecha_ocurrencia, narracion, archivos, "
     "saldo_credito, destino_pago, reportado_en, ultima_entrega_en, actualizado_en, "
-    "evidencia_pedida, motivo_rechazo, pago, automatico, evento, decisiones"
+    "evidencia_pedida, motivo_rechazo, pago, automatico, evento, decisiones, asistencias"
 )
 
 
@@ -1310,6 +1316,49 @@ def _json_a_decisiones(crudo: str | None) -> tuple[DecisionSiniestro, ...]:
     )
 
 
+def _asistencia_a_dict(a: Asistencia) -> dict:
+    return {
+        "id": a.id,
+        "numero": a.numero,
+        "tipo": a.tipo,
+        "prestador": {
+            "id": a.prestador.id,
+            "nombre": a.prestador.nombre,
+            "direccion": a.prestador.direccion,
+            "tiempoLlegadaMin": a.prestador.tiempo_llegada_min,
+        },
+        "origen": str(a.origen),
+        "solicitadaEn": _utc(a.solicitada_en),
+        "latitud": a.latitud,
+        "longitud": a.longitud,
+        "direccion": a.direccion,
+        "localidad": a.localidad,
+    }
+
+
+def _json_a_asistencias(crudo: str | None) -> tuple[Asistencia, ...]:
+    return tuple(
+        Asistencia(
+            id=d["id"],
+            numero=d["numero"],
+            tipo=d["tipo"],
+            prestador=PrestadorAsistencia(
+                id=d["prestador"]["id"],
+                nombre=d["prestador"]["nombre"],
+                direccion=d["prestador"]["direccion"],
+                tiempo_llegada_min=d["prestador"]["tiempoLlegadaMin"],
+            ),
+            origen=OrigenAsistencia(d["origen"]),
+            solicitada_en=datetime.fromisoformat(d["solicitadaEn"]),
+            latitud=d.get("latitud"),
+            longitud=d.get("longitud"),
+            direccion=d.get("direccion"),
+            localidad=d.get("localidad"),
+        )
+        for d in json.loads(crudo or "[]")
+    )
+
+
 def _siniestro_a_fila(x: Siniestro) -> tuple:
     saldo = x.saldo_credito
     return (
@@ -1340,6 +1389,7 @@ def _siniestro_a_fila(x: Siniestro) -> tuple:
         int(x.automatico),
         json.dumps(x.evento) if x.evento is not None else None,
         _decisiones_a_json(x.decisiones),
+        json.dumps([_asistencia_a_dict(a) for a in x.asistencias]),
     )
 
 
@@ -1371,6 +1421,7 @@ def _fila_a_siniestro(row: aiosqlite.Row) -> Siniestro:
         automatico=bool(row["automatico"]),
         evento=json.loads(row["evento"]) if row["evento"] else None,
         decisiones=_json_a_decisiones(row["decisiones"]),
+        asistencias=_json_a_asistencias(row["asistencias"]),
     )
 
 
@@ -1383,7 +1434,7 @@ class SqliteSiniestroRepository:
             try:
                 await conn.execute(
                     f"INSERT INTO siniestros ({_COLUMNAS_SINIESTRO}) "
-                    f"VALUES ({', '.join('?' * 20)})",
+                    f"VALUES ({', '.join('?' * 21)})",
                     _siniestro_a_fila(siniestro),
                 )
                 await conn.commit()
@@ -1442,6 +1493,19 @@ class SqliteSiniestroRepository:
                 parametros,
             )
             return [_fila_a_siniestro(r) for r in await cursor.fetchall()]
+
+    async def agregar_asistencia(self, siniestro_id: str, asistencia: Asistencia) -> bool:
+        """Se agrega al arreglo y se comprueba el estado en la misma sentencia: una solicitud que
+        llega mientras otra acción cierra el siniestro queda fuera, y dos solicitudes al mismo
+        tiempo quedan las dos."""
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "UPDATE siniestros SET asistencias = json_insert(asistencias, '$[#]', json(?)) "
+                "WHERE id = ? AND estado IN ('EN_ESTUDIO', 'FALTA_INFORMACION')",
+                (json.dumps(_asistencia_a_dict(asistencia)), siniestro_id),
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
 
     async def actualizar(self, siniestro: Siniestro, estado_anterior: EstadoSiniestro) -> bool:
         """El estado se comprueba en la misma sentencia que lo cambia: dos acciones al mismo

@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator
 from app.adapters.creditos_fake import CreditosFake
 from app.adapters.polizas_fake import cotizacion_de_ejemplo
 from app.domain import CreditosReportados, HipotecaReportada, OrigenSaldo
+from app.siniestros import hoy_en_colombia
 from tests import imagenes
 from tests.conftest import CLIENTE_VALIDO
 
@@ -65,7 +66,9 @@ async def _poliza_emitida(
 
 
 def _hoy() -> str:
-    return datetime.now(UTC).astimezone().date().isoformat()
+    # La fecha de Colombia, que es la que usa el servicio. Con la de la máquina, un equipo en UTC
+    # después de las 19:00 de Colombia mandaría un día en el futuro (FUERA_DE_VIGENCIA).
+    return hoy_en_colombia().isoformat()
 
 
 def _datos(poliza_id, **cambios) -> dict:

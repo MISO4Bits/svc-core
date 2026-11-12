@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from app.domain import (
@@ -24,6 +24,7 @@ from app.domain import (
     EstadoPoliza,
     EstadoSiniestro,
     MotivoRechazo,
+    OrigenAsistencia,
     OrigenDatos,
     OrigenSaldo,
     PlataformaDispositivo,
@@ -416,6 +417,78 @@ class EventoSismoOut(_Model):
     magnitud: float
 
 
+class PrestadorAsistenciaIn(_Model):
+    id: str = Field(min_length=1, max_length=40)
+    nombre: str = Field(min_length=1, max_length=120)
+    direccion: str = Field(min_length=1, max_length=200)
+    tiempo_llegada_min: int = Field(ge=1, le=1440)
+
+
+class PedirAyudaRequest(_Model):
+    """La solicitud de ayuda en sitio. La app manda los datos del prestador que el cliente eligió
+    y el punto al que va: ``FOTOS`` y ``TELEFONO`` llevan coordenadas; ``DIRECCION`` lleva la
+    dirección escrita y la localidad. No se compara el GPS con ninguna dirección."""
+
+    tipo: str = Field(pattern=r"^[a-z][a-z0-9-]{0,39}$")
+    prestador: PrestadorAsistenciaIn
+    origen: OrigenAsistencia
+    latitud: float | None = Field(default=None, ge=-90, le=90)
+    longitud: float | None = Field(default=None, ge=-180, le=180)
+    direccion: str | None = Field(default=None, min_length=1, max_length=200)
+    localidad: str | None = Field(default=None, min_length=1, max_length=60)
+
+    @model_validator(mode="after")
+    def _punto_coherente(self) -> PedirAyudaRequest:
+        if self.origen is OrigenAsistencia.DIRECCION:
+            if not self.direccion or not self.localidad:
+                raise ValueError("Con origen DIRECCION van la dirección y la localidad")
+            if self.latitud is not None or self.longitud is not None:
+                raise ValueError("Con origen DIRECCION no van coordenadas")
+        else:
+            if self.latitud is None or self.longitud is None:
+                raise ValueError(f"Con origen {self.origen} van la latitud y la longitud")
+            if self.direccion is not None or self.localidad is not None:
+                raise ValueError(f"Con origen {self.origen} no van dirección ni localidad")
+        return self
+
+
+class PrestadorAsistenciaOut(_Model):
+    id: str
+    nombre: str
+    direccion: str
+    tiempo_llegada_min: int
+
+
+class AsistenciaOut(_Model):
+    id: str
+    numero: str
+    tipo: str
+    prestador: PrestadorAsistenciaOut
+    tiempo_llegada_min: int
+    origen: OrigenAsistencia
+    latitud: float | None = None
+    longitud: float | None = None
+    direccion: str | None = None
+    localidad: str | None = None
+    solicitada_en: AwareDatetime
+
+    @classmethod
+    def desde_dominio(cls, a) -> AsistenciaOut:
+        return cls(
+            id=a.id,
+            numero=a.numero,
+            tipo=a.tipo,
+            prestador=PrestadorAsistenciaOut.model_validate(a.prestador),
+            tiempo_llegada_min=a.prestador.tiempo_llegada_min,
+            origen=a.origen,
+            latitud=a.latitud,
+            longitud=a.longitud,
+            direccion=a.direccion,
+            localidad=a.localidad,
+            solicitada_en=a.solicitada_en,
+        )
+
+
 class SiniestroResumenOut(_Model):
     id: str
     numero: str
@@ -440,6 +513,12 @@ class SiniestroOut(SiniestroResumenOut):
     pago: PagoOut | None = None
     archivos: list[ArchivoSiniestroOut]
     evento: EventoSismoOut | None = None
+    asistencias: list[AsistenciaOut] = []
+
+    @field_validator("asistencias", mode="before")
+    @classmethod
+    def _asistencias_del_dominio(cls, valor):
+        return [AsistenciaOut.desde_dominio(a) if hasattr(a, "prestador") else a for a in valor]
 
 
 # --- Bandeja del ADMIN (BITS-377) ---
