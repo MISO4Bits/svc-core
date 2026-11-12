@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -174,6 +175,9 @@ class SqliteDatabase:
                 # BITS-378: la venta directa del socio, en bases de dev anteriores.
                 "ALTER TABLE polizas ADD COLUMN socio_id TEXT",
                 "ALTER TABLE polizas ADD COLUMN datos_venta TEXT",
+                # BITS-380: la lista de pólizas de cada socio. Va después del ALTER: en una base
+                # vieja la columna todavía no existe cuando corre el esquema.
+                "CREATE INDEX IF NOT EXISTS idx_polizas_socio ON polizas (socio_id, creada_en)",
                 *_MIGRACION_SINIESTROS,
             ):
                 try:
@@ -331,6 +335,17 @@ class SqliteClienteRepository:
             )
             row = await cursor.fetchone()
         return _row_to_cliente(row) if row else None
+
+    async def obtener_varios(self, cliente_ids: Sequence[str]) -> dict[str, Cliente]:
+        ids = list(dict.fromkeys(cliente_ids))
+        if not ids:
+            return {}
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"SELECT * FROM clientes WHERE id IN ({', '.join('?' * len(ids))})", ids
+            )
+            filas = await cursor.fetchall()
+        return {fila["id"]: _row_to_cliente(fila) for fila in filas}
 
     async def buscar_por_documento(
         self, tipo_documento: str, numero_documento: str
@@ -842,6 +857,9 @@ class SqlitePolizaRepository:
         if filtro.cliente_id:
             condiciones.append("cliente_id = ?")
             parametros.append(filtro.cliente_id)
+        if filtro.socio_id:
+            condiciones.append("socio_id = ?")
+            parametros.append(filtro.socio_id)
         if filtro.creada_desde:
             condiciones.append("creada_en >= ?")
             parametros.append(_utc(filtro.creada_desde))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -52,6 +53,10 @@ class ClienteRepository(Protocol):
     async def existe_por_documento(self, tipo_documento: str, numero_documento: str) -> bool: ...
 
     async def existe_por_correo(self, email: str) -> bool: ...
+
+    async def obtener_varios(self, cliente_ids: Sequence[str]) -> dict[str, Cliente]:
+        """Los clientes con esos ids en una sola consulta (los que no existen no salen)."""
+        ...
 
     async def buscar_por_correo(self, email: str) -> Cliente | None: ...
 

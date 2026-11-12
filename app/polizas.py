@@ -574,6 +574,10 @@ class PolizaService:
     async def listar(self, filtro: FiltroPolizas) -> PaginaPolizas:
         return await self._polizas.listar(filtro, self._ahora())
 
+    async def clientes_de(self, cliente_ids: Sequence[str]) -> dict[str, Cliente]:
+        """Los clientes de una página de pólizas, en una sola consulta."""
+        return await self._clientes.obtener_varios(cliente_ids)
+
     async def obtener_interna(self, poliza_id: str) -> Poliza:
         poliza = await self._polizas.obtener(poliza_id)
         if poliza is None:

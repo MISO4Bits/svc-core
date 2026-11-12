@@ -620,6 +620,16 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: socioId
+        in: query
+        description: |
+          Solo las pólizas que vendió ese socio (BITS-380): el `uid` de su sesión, que pone el BFF
+          y nunca viene de quien consulta. Con él, cada fila trae `cliente` (nombre y últimos cuatro
+          dígitos del documento), que se pide de una vez para toda la página.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
       - name: creadaDesde
         in: query
         schema:
@@ -1899,6 +1909,35 @@ components:
                 $ref: '#/components/schemas/CodigoPendiente'
               tipo:
                 $ref: '#/components/schemas/TipoPendiente'
+        socioId:
+          type:
+          - string
+          - 'null'
+          description: Solo las pólizas que vendió un socio.
+        emitidaEn:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: La fecha de la venta, en una póliza vendida por un socio.
+        cliente:
+          oneOf:
+          - $ref: '#/components/schemas/ClienteDeVenta'
+          - type: 'null'
+          description: Solo al listar con `socioId`.
+    ClienteDeVenta:
+      type: object
+      additionalProperties: false
+      description: |
+        Del cliente de una póliza vendida, lo que el socio puede ver. Nunca correo, teléfono, fecha
+        de nacimiento ni el documento completo.
+      required: [id, nombre, tipoDocumento, ultimosDigitosDocumento, estado]
+      properties:
+        id: { type: string }
+        nombre: { type: string }
+        tipoDocumento: { $ref: '#/components/schemas/TipoDocumento' }
+        ultimosDigitosDocumento: { type: string, maxLength: 4 }
+        estado: { $ref: '#/components/schemas/EstadoCliente' }
     DecisionRequest:
       type: object
       additionalProperties: false
