@@ -498,6 +498,8 @@ class FiltroPolizas:
     tipo_pendiente: TipoPendiente | None = None
     codigo_pendiente: CodigoPendiente | None = None
     cliente_id: str | None = None
+    # Las pólizas que vendió ese socio (BITS-380): el ``uid`` de su sesión, nunca un parámetro.
+    socio_id: str | None = None
     creada_desde: datetime | None = None
     creada_hasta: datetime | None = None
     mas_recientes_primero: bool = False

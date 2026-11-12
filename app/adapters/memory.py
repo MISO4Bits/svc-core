@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -65,6 +66,9 @@ class InMemoryClienteRepository:
 
     async def existe_por_correo(self, email: str) -> bool:
         return email in self._emails
+
+    async def obtener_varios(self, cliente_ids: Sequence[str]) -> dict[str, Cliente]:
+        return {i: self._by_id[i] for i in dict.fromkeys(cliente_ids) if i in self._by_id}
 
     async def buscar_por_correo(self, email: str) -> Cliente | None:
         return next((c for c in self._by_id.values() if c.email.lower() == email.lower()), None)
@@ -338,6 +342,8 @@ class InMemoryPolizaRepository:
 
 def _cumple(poliza: Poliza, filtro: FiltroPolizas, ahora: datetime) -> bool:
     if filtro.cliente_id and poliza.cliente_id != filtro.cliente_id:
+        return False
+    if filtro.socio_id and poliza.socio_id != filtro.socio_id:
         return False
     if filtro.estado and poliza.estado_en(ahora) is not filtro.estado:
         return False

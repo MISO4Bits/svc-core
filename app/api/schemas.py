@@ -276,12 +276,28 @@ class PendienteResumenOut(_Model):
     tipo: TipoPendiente
 
 
+class ClienteDeVentaOut(_Model):
+    """Del cliente de una póliza vendida, lo que el socio puede ver: quién es y los últimos
+    cuatro dígitos de su documento. Nunca correo, teléfono, fecha de nacimiento ni el documento
+    completo."""
+
+    id: str
+    nombre: str
+    tipo_documento: TipoDocumento
+    ultimos_digitos_documento: str
+    estado: EstadoCliente
+
+
 class PolizaResumenOut(_Model):
     poliza_id: str
     numero: str | None
     cliente_id: str
     estado: EstadoPoliza
     creada_en: datetime
+    # Solo las pólizas que vendió un socio (BITS-380). ``cliente`` solo viene al listar por socio.
+    socio_id: str | None = None
+    emitida_en: datetime | None = None
+    cliente: ClienteDeVentaOut | None = None
     solicitud_vigente_hasta: datetime | None
     prima_total_mensual: float
     origen_datos: OrigenDatos

@@ -429,6 +429,8 @@ async def test_una_base_anterior_a_la_venta_directa_gana_las_columnas(tmp_path):
     db = SqliteDatabase(ruta)
     await db.init()
     async with aiosqlite.connect(ruta) as conn:
+        # Una base anterior a BITS-380 tampoco tiene el índice por socio.
+        await conn.execute("DROP INDEX idx_polizas_socio")
         await conn.execute("ALTER TABLE polizas DROP COLUMN socio_id")
         await conn.execute("ALTER TABLE polizas DROP COLUMN datos_venta")
         await conn.commit()
@@ -439,6 +441,11 @@ async def test_una_base_anterior_a_la_venta_directa_gana_las_columnas(tmp_path):
     poliza = _poliza()
     await repo.crear(poliza)
     assert (await repo.obtener(poliza.id)).socio_id == "socio-1"
+    async with aiosqlite.connect(ruta) as conn:
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_polizas_socio'"
+        )
+        assert await cursor.fetchone() is not None  # la migración también recrea el índice
 
 
 # --- fábrica ---

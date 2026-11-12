@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.api.schemas import (
+    ClienteDeVentaOut,
     CoberturaContratadaOut,
     DatosCreditoOut,
     DatosVentaOut,
@@ -37,6 +38,7 @@ from app.api.schemas import (
     VigenciaOut,
 )
 from app.domain import (
+    Cliente,
     CodigoPendiente,
     EstadoDocumentoPoliza,
     EstadoPoliza,
@@ -262,6 +264,28 @@ def _validar_cursor(cursor: str | None) -> None:
         raise SolicitudPolizaInvalida("cursor", "El cursor no es válido")
 
 
+def _cliente_de_venta(cliente: Cliente | None) -> ClienteDeVentaOut | None:
+    if cliente is None:
+        return None
+    nombre = " ".join(
+        parte
+        for parte in (
+            cliente.primer_nombre,
+            cliente.segundo_nombre,
+            cliente.primer_apellido,
+            cliente.segundo_apellido,
+        )
+        if parte
+    )
+    return ClienteDeVentaOut(
+        id=cliente.id,
+        nombre=nombre,
+        tipo_documento=cliente.tipo_documento,
+        ultimos_digitos_documento=cliente.numero_documento[-4:],
+        estado=cliente.estado,
+    )
+
+
 @router.get("/polizas", response_model=PaginaPolizasOut, tags=["Pólizas (backoffice)"])
 async def listar_polizas(
     service: PolizasDep,
@@ -269,6 +293,7 @@ async def listar_polizas(
     tipo_pendiente: Annotated[TipoPendiente | None, Query(alias="tipoPendiente")] = None,
     codigo_pendiente: Annotated[CodigoPendiente | None, Query(alias="codigoPendiente")] = None,
     cliente_id: Annotated[str | None, Query(alias="clienteId", max_length=64)] = None,
+    socio_id: Annotated[str | None, Query(alias="socioId", min_length=1, max_length=128)] = None,
     creada_desde: Annotated[datetime | None, Query(alias="creadaDesde")] = None,
     creada_hasta: Annotated[datetime | None, Query(alias="creadaHasta")] = None,
     orden: Annotated[Literal["creadaEn", "-creadaEn"], Query()] = "creadaEn",
@@ -283,6 +308,7 @@ async def listar_polizas(
             tipo_pendiente=tipo_pendiente,
             codigo_pendiente=codigo_pendiente,
             cliente_id=cliente_id,
+            socio_id=socio_id,
             creada_desde=creada_desde,
             creada_hasta=creada_hasta,
             mas_recientes_primero=orden == "-creadaEn",
@@ -291,6 +317,8 @@ async def listar_polizas(
         )
     )
     ahora = now_utc()
+    # Al listar por socio cada fila trae al cliente, y se piden todos de una vez.
+    clientes = await service.clientes_de([p.cliente_id for p in pagina.items]) if socio_id else {}
     return PaginaPolizasOut(
         items=[
             PolizaResumenOut(
@@ -299,6 +327,9 @@ async def listar_polizas(
                 cliente_id=p.cliente_id,
                 estado=p.estado_en(ahora),
                 creada_en=p.creada_en,
+                socio_id=p.socio_id,
+                emitida_en=p.emitida_en,
+                cliente=_cliente_de_venta(clientes.get(p.cliente_id)),
                 solicitud_vigente_hasta=(
                     None if p.estado is EstadoPoliza.EMITIDA else p.solicitud_vigente_hasta
                 ),
