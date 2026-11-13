@@ -1143,6 +1143,39 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemaSiniestro' }
 
+  /v1/eventos-sismicos:
+    post:
+      operationId: reportarSismo
+      tags: [Sismos]
+      summary: Simula el aviso de un sismo (paga la cuota a las pólizas del municipio)
+      description: |
+        Interno y sin BFF: se usa desde Postman. Simula el aviso del Servicio Geológico
+        Colombiano. Valida el cuerpo, publica `SismoReportado` en `solventa-dominio` y responde
+        `202`: **el pago no ocurre en esta petición**, lo hace el consumidor de Core.
+
+        Si la `magnitud` alcanza el umbral configurado (`sismo_magnitud_minima`), cada póliza
+        `EMITIDA` con Tu casa que estaba vigente en la `fecha` y cuyo municipio es el del sismo
+        recibe un siniestro `SISMO_PARAMETRICO` (`automatico: true`) que nace `PAGADO`, con una
+        sola línea al banco por una cuota del crédito y el aviso «Te pagamos solos». El municipio
+        sale de lo que capturó el socio al vender o, si no, de la ciudad del perfil; la cuota, de
+        lo mismo o de la hipoteca de la entidad de la póliza. Lo que no se pueda saber omite esa
+        póliza (con su motivo en el registro) y las demás siguen.
+
+        «Pagar» es la orden de pago simulada del siniestro: no se mueve dinero. Repetir el mismo
+        `eventoId` no paga dos veces la misma póliza.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Sismo' }
+      responses:
+        '202':
+          description: Aviso recibido; el pago lo hace el consumidor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SismoAceptado' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+
   /v1/siniestros:
     get:
       operationId: listarBandejaDeSiniestros
@@ -2551,6 +2584,31 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Asistencia' }
           description: Las solicitudes de ayuda en sitio, de la más antigua a la más reciente.
+
+    Sismo:
+      type: object
+      additionalProperties: false
+      required: [eventoId, municipio, magnitud, fecha]
+      properties:
+        eventoId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._:-]+$'
+          description: Identifica el sismo. Repetirlo no paga dos veces la misma póliza.
+        municipio: { type: string, minLength: 1, maxLength: 80, examples: [Bogotá] }
+        magnitud: { type: number, minimum: 0, maximum: 10, examples: [6.1] }
+        fecha:
+          type: string
+          format: date
+          description: El día del sismo, en hora de Colombia. No puede ser futuro.
+
+    SismoAceptado:
+      type: object
+      additionalProperties: false
+      required: [eventoId]
+      properties:
+        eventoId: { type: string }
 
     PrestadorAsistencia:
       type: object

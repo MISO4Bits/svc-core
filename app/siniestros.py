@@ -12,13 +12,14 @@ import secrets
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from decimal import Decimal
 
 from app.avisos import Aviso, AvisoService, ruta_seguro
 from app.domain import (
     ESTADOS_EN_CURSO,
     MAX_ARCHIVOS_SINIESTRO,
+    ZONA_COLOMBIA,
     ArchivoNoEncontrado,
     ArchivoSiniestro,
     Asistencia,
@@ -30,6 +31,7 @@ from app.domain import (
     DanoHogar,
     EstadoPoliza,
     EstadoSiniestro,
+    EventoSismo,
     FueraDeVigencia,
     LineaPago,
     NumeroSiniestroDuplicado,
@@ -67,9 +69,9 @@ from app.ports import (
 
 logger = logging.getLogger("svc_core.siniestros")
 
-# Colombia no tiene horario de verano: UTC-5 fijo, sin depender de la base de zonas horarias.
-ZONA_COLOMBIA = timezone(timedelta(hours=-5))
 ESTADO_DISPONIBLE = "DISPONIBLE"
+# Quien figura en la decisión de un pago que no tomó ninguna persona (BITS-386).
+AGENTE_DEL_SISMO = "Pago automático por sismo"
 MAX_NARRACION = 4000
 _EXTENSION = {"image/jpeg": "jpg", "image/png": "png"}
 _INTENTOS_NUMERO = 5
@@ -131,7 +133,7 @@ class DecisionEntrada:
 MAX_TEXTO_DECISION = 2000
 
 
-def _normalizado(texto: str) -> str:
+def normalizado(texto: str) -> str:
     """Sin tildes ni mayúsculas: el banco se escribe distinto según la fuente."""
     sin_tildes = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
     return " ".join(sin_tildes.casefold().split())
@@ -166,6 +168,11 @@ class SiniestroService:
         self._ahora = ahora
         self._hoy = hoy
         self._aleatorio = aleatorio
+
+    @property
+    def creditos(self) -> CreditosPort:
+        """El adaptador de svc-perfilamiento: el pago por sismo lo reutiliza para la cuota."""
+        return self._creditos
 
     @property
     def max_bytes(self) -> int:
@@ -452,6 +459,56 @@ class SiniestroService:
         )
         return asistencia
 
+    async def polizas_con_siniestro_de_evento(self, evento_id: str) -> frozenset[str]:
+        return await self._siniestros.polizas_con_evento(evento_id)
+
+    async def pagar_por_sismo(
+        self, poliza: Poliza, evento: EventoSismo, cuota: Decimal
+    ) -> Siniestro:
+        """Crea el siniestro paramétrico de la póliza y lo paga al instante: nace ``PAGADO``, sin
+        pasar por ``EN_ESTUDIO`` ni por el ``ADMIN``, con una sola línea al banco por una cuota del
+        crédito. Lanza ``SiniestroDeSismoRepetido`` si la póliza ya cobró ese sismo."""
+        ahora = self._ahora()
+        credito = poliza.datos_credito
+        siniestro = Siniestro(
+            cliente_id=poliza.cliente_id,
+            poliza_id=poliza.id,
+            tipo=TipoSiniestro.SISMO_PARAMETRICO,
+            fecha_ocurrencia=evento.fecha,
+            saldo_credito=SaldoCredito(
+                valor=credito.saldo_insoluto,
+                entidad=credito.entidad_acreedora,
+                consultado_en=ahora,
+                origen=OrigenSaldo.POLIZA,
+            ),
+            numero="",
+            narracion=f"Sismo de magnitud {evento.magnitud} en {evento.municipio}",
+            automatico=True,
+            evento={
+                "fecha": evento.fecha.isoformat(),
+                "municipio": evento.municipio,
+                "magnitud": evento.magnitud,
+            },
+            evento_id=evento.evento_id,
+            reportado_en=ahora,
+            ultima_entrega_en=ahora,
+            actualizado_en=ahora,
+        )
+        orden = Pago(
+            ahora,
+            (
+                LineaPago(
+                    BeneficiarioPago.BANCO,
+                    cuota,
+                    f"{credito.entidad_acreedora}, abono a la cuota del crédito",
+                ),
+            ),
+        )
+        siniestro.pagar(orden, ahora, AGENTE_DEL_SISMO, valor=cuota)
+        await self._crear(siniestro)
+        await self._avisar(siniestro, Aviso.SINIESTRO_PAGO_AUTOMATICO)
+        return siniestro
+
     async def _siniestro_o_404(self, siniestro_id: str) -> Siniestro:
         siniestro = await self._siniestros.obtener(siniestro_id)
         if siniestro is None:
@@ -595,9 +652,9 @@ class SiniestroService:
         credito = poliza.datos_credito
         reportados = await self._creditos.hipotecas(cliente_id)
         if reportados.estado == ESTADO_DISPONIBLE:
-            objetivo = _normalizado(credito.entidad_acreedora)
+            objetivo = normalizado(credito.entidad_acreedora)
             hipoteca = next(
-                (h for h in reportados.hipotecas if _normalizado(h.entidad_acreedora) == objetivo),
+                (h for h in reportados.hipotecas if normalizado(h.entidad_acreedora) == objetivo),
                 None,
             )
             if hipoteca is not None:

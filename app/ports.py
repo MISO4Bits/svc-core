@@ -179,6 +179,14 @@ class AlmacenEvidencias(Protocol):
 
 
 @runtime_checkable
+class CiudadClientePort(Protocol):
+    async def ciudad(self, cliente_id: str) -> str | None:
+        """La ciudad del cliente según svc-perfilamiento (la que reportó Open Data). ``None`` si no
+        se sabe: sin consentimiento, sin perfil, o si no responde. Nunca lanza."""
+        ...
+
+
+@runtime_checkable
 class VerificadorDocumento(Protocol):
     async def analizar(
         self, imagen: bytes, tipo: TipoEvidencia, numero_esperado: str | None
@@ -364,6 +372,10 @@ class SiniestroRepository(Protocol):
     ) -> list[Siniestro]:
         """Los de todos los clientes (la bandeja del ``ADMIN``), con los filtros que lleguen, del
         más reciente al más antiguo. Quien llama los ordena por plazo."""
+        ...
+
+    async def polizas_con_evento(self, evento_id: str) -> frozenset[str]:
+        """Los ids de las pólizas que ya tienen un siniestro de ese sismo."""
         ...
 
     async def agregar_asistencia(self, siniestro_id: str, asistencia: Asistencia) -> bool:

@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
@@ -492,12 +492,25 @@ class Poliza:
         return self.estado
 
 
+# Colombia no tiene horario de verano: UTC-5 fijo, sin depender de la base de zonas horarias.
+ZONA_COLOMBIA = timezone(timedelta(hours=-5))
+
+
+def dia_en_colombia(fecha: date) -> tuple[datetime, datetime]:
+    """El día de Colombia como rango en UTC: ``[inicio, fin)``."""
+    inicio = datetime(fecha.year, fecha.month, fecha.day, tzinfo=ZONA_COLOMBIA)
+    return inicio.astimezone(UTC), (inicio + timedelta(days=1)).astimezone(UTC)
+
+
 @dataclass(frozen=True)
 class FiltroPolizas:
     estado: EstadoPoliza | None = None
     tipo_pendiente: TipoPendiente | None = None
     codigo_pendiente: CodigoPendiente | None = None
     cliente_id: str | None = None
+    # Las que tienen esa cobertura y estaban vigentes ese día de Colombia (sismo, BITS-386).
+    con_cobertura: CodigoCobertura | None = None
+    vigente_el: date | None = None
     # Las pólizas que vendió ese socio (BITS-380): el ``uid`` de su sesión, nunca un parámetro.
     socio_id: str | None = None
     creada_desde: datetime | None = None
@@ -980,6 +993,9 @@ class Siniestro:
     evento: dict | None = None
     # Solicitudes de ayuda en sitio (BITS-385): solo Tu casa y solo con el siniestro en curso.
     asistencias: tuple[Asistencia, ...] = ()
+    # Solo el paramétrico: el sismo que lo creó. Con la póliza es único: un mismo sismo no paga dos
+    # veces la misma póliza aunque llegue repetido o a dos réplicas a la vez.
+    evento_id: str | None = None
 
     @property
     def fecha_limite(self) -> datetime | None:
@@ -1079,6 +1095,20 @@ class SolicitudSiniestroInvalida(SolicitudPolizaInvalida):
 
 class NumeroSiniestroDuplicado(DomainError):
     """El radicado generado ya lo tiene otro siniestro; el servicio genera otro."""
+
+
+@dataclass(frozen=True)
+class EventoSismo:
+    """El aviso (simulado) del Servicio Geológico Colombiano."""
+
+    evento_id: str
+    municipio: str
+    magnitud: float
+    fecha: date
+
+
+class SiniestroDeSismoRepetido(DomainError):
+    """La póliza ya tiene un siniestro de ese sismo: no se paga otra vez."""
 
 
 class AyudaNoDisponible(ConflictoSiniestro):

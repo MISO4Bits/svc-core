@@ -663,3 +663,29 @@ async def test_un_error_inesperado_al_preparar_el_correo_no_rompe_el_alta(caplog
 
     assert "clave-secreta-en-el-detalle" not in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+# --- BITS-386: la columna y el índice del sismo en bases anteriores ---
+
+
+async def test_una_base_anterior_al_sismo_gana_la_columna_y_el_indice_unico(tmp_path):
+    ruta = str(tmp_path / "anterior.db")
+    db = SqliteDatabase(ruta)
+    await db.init()
+    async with aiosqlite.connect(ruta) as conn:
+        await conn.execute("DROP INDEX idx_siniestros_evento")
+        await conn.execute("ALTER TABLE siniestros DROP COLUMN evento_id")
+        await conn.commit()
+
+    await db.init()  # la migración vuelve a agregarlas
+
+    async with aiosqlite.connect(ruta) as conn:
+        columnas = {
+            fila[1]
+            for fila in await (await conn.execute("PRAGMA table_info(siniestros)")).fetchall()
+        }
+        indice = await (
+            await conn.execute("SELECT sql FROM sqlite_master WHERE name = 'idx_siniestros_evento'")
+        ).fetchone()
+    assert "evento_id" in columnas
+    assert indice is not None and "UNIQUE" in indice[0]

@@ -12,6 +12,13 @@ class CreditosFake:
     def __init__(self, respuesta: CreditosReportados | None = None) -> None:
         self.respuesta = respuesta or CreditosReportados(estado="NO_DISPONIBLE")
         self.consultas: list[str] = []
+        # Ciudad de cada cliente según el perfil (BITS-386); sin entrada, no se sabe.
+        self.ciudades: dict[str, str] = {}
+        self.consultas_de_ciudad: list[str] = []
+
+    async def ciudad(self, cliente_id: str) -> str | None:
+        self.consultas_de_ciudad.append(cliente_id)
+        return self.ciudades.get(cliente_id)
 
     async def hipotecas(self, cliente_id: str) -> CreditosReportados:
         self.consultas.append(cliente_id)

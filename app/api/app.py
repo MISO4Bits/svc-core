@@ -30,6 +30,7 @@ from app.api.polizas import router as polizas_router
 from app.api.routes import router
 from app.api.siniestros import router as siniestros_router
 from app.api.siniestros_internos import router as siniestros_internos_router
+from app.api.sismos import router as sismos_router
 from app.api.usuarios_internos import router as usuarios_internos_router
 from app.api.ventas import router as ventas_router
 from app.clientes_asistidos import ClientesAsistidosService
@@ -40,6 +41,7 @@ from app.evidencias import EvidenciaService
 from app.logging_utils import SinRuidoDeHealthCheck
 from app.polizas import PolizaService
 from app.services import IdentityService
+from app.sismos import SismoService
 from app.telemetry import agregar_encabezado_trace_id, setup_telemetry, shutdown_telemetry
 
 SPEC_PATH = Path(__file__).resolve().parents[2] / "openapi" / "openapi.yaml"
@@ -119,12 +121,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         al_guardar=polizas.reevaluar_cliente,
     )
 
+    # Pago automático por sismo (BITS-386). La ciudad la entrega el mismo adaptador de
+    # svc-perfilamiento que las hipotecas.
+    sismos = SismoService(
+        repo_polizas,
+        siniestros,
+        siniestros.creditos,
+        magnitud_minima=settings.sismo_magnitud_minima,
+        concurrencia=settings.sismo_concurrencia,
+    )
+
     consumidor = None
     if settings.consumidor_backend == "pubsub":  # pragma: no cover
         from app.adapters.pubsub_consumer import ConsumidorPubSub
 
         consumidor = ConsumidorPubSub(
-            settings.pubsub_project_id or "", settings.pubsub_subscription, polizas
+            settings.pubsub_project_id or "", settings.pubsub_subscription, polizas, sismos
         )
 
     tareas_de_arranque: list[asyncio.Task] = []
@@ -157,14 +169,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 )
             )
-        yield
-        for tarea in tareas_de_arranque:
-            tarea.cancel()
-        if consumidor is not None:
-            consumidor.detener()  # pragma: no cover — idem
-        for adaptador in cerrables:
-            await adaptador.aclose()
-        shutdown_telemetry(telemetry)
+        try:
+            yield
+        finally:
+            for tarea in tareas_de_arranque:
+                tarea.cancel()
+            try:
+                if consumidor is not None:
+                    consumidor.detener()  # pragma: no cover — idem
+                for adaptador in cerrables:
+                    await adaptador.aclose()
+            finally:
+                shutdown_telemetry(telemetry)
 
     app = FastAPI(
         title="ICustomerIdentity — CoreTransaccional",
@@ -185,6 +201,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.dispositivos = dispositivos
     app.state.cuentas_internas = cuentas_internas
     app.state.siniestros = siniestros
+    app.state.sismos = sismos
     app.state.clientes_asistidos = clientes_asistidos
 
     install_error_handlers(app)
@@ -195,6 +212,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(usuarios_internos_router, prefix="/v1")
     app.include_router(siniestros_router, prefix="/v1")
     app.include_router(siniestros_internos_router, prefix="/v1")
+    app.include_router(sismos_router, prefix="/v1")
     app.include_router(ventas_router, prefix="/v1")
 
     @app.get("/health", include_in_schema=False)

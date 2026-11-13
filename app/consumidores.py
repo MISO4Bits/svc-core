@@ -14,20 +14,23 @@ Core encarga entonces el correo con el archivo adjunto.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
-from app.domain import DomainEvent
+from app.domain import DomainEvent, EventoSismo
 from app.logging_utils import sanear_para_log
 from app.polizas import PolizaService
+from app.sismos import SismoService
 
 logger = logging.getLogger("svc_core.consumidores")
 
 TIPOS_QUE_CONSUME = frozenset(
-    {"CotizacionCreada", "CotizacionEliminada", "DocumentoPolizaGenerado"}
+    {"CotizacionCreada", "CotizacionEliminada", "DocumentoPolizaGenerado", "SismoReportado"}
 )
 
 
-async def despachar_evento(polizas: PolizaService, evento: DomainEvent) -> None:
+async def despachar_evento(
+    polizas: PolizaService, evento: DomainEvent, sismos: SismoService | None = None
+) -> None:
     if evento.tipo == "CotizacionCreada":
         cliente_id = evento.datos["clienteId"]
         logger.info("despachar_evento: CotizacionCreada cliente_id=%s", sanear_para_log(cliente_id))
@@ -49,6 +52,27 @@ async def despachar_evento(polizas: PolizaService, evento: DomainEvent) -> None:
         except KeyError as exc:
             # Un aviso sin los campos que necesita no se arregla reintentando: se descarta.
             logger.error("despachar_evento: DocumentoPolizaGenerado sin el campo %s", exc)
+        return
+
+    if evento.tipo == "SismoReportado":
+        if sismos is None:
+            logger.error("despachar_evento: SismoReportado sin el servicio de sismos")
+            return
+        try:
+            sismo = EventoSismo(
+                evento_id=str(evento.datos["eventoId"]),
+                municipio=str(evento.datos["municipio"]),
+                magnitud=float(evento.datos["magnitud"]),
+                fecha=date.fromisoformat(evento.datos["fecha"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            # Un aviso mal formado no se arregla reintentando: se descarta.
+            logger.error("despachar_evento: SismoReportado inválido (%s)", type(exc).__name__)
+            return
+        logger.info(
+            "despachar_evento: SismoReportado evento_id=%s", sanear_para_log(sismo.evento_id)
+        )
+        await sismos.procesar(sismo)
         return
 
     # El filtro de la suscripción deja pasar solo estos tipos: llegar aquí es señal de que el

@@ -433,6 +433,20 @@ class EventoSismoOut(_Model):
     magnitud: float
 
 
+class SismoRequest(_Model):
+    """El aviso (simulado) del Servicio Geológico Colombiano. ``eventoId`` identifica el sismo:
+    repetirlo no paga dos veces la misma póliza."""
+
+    evento_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    municipio: str = Field(min_length=1, max_length=80)
+    magnitud: float = Field(ge=0, le=10)
+    fecha: date
+
+
+class SismoAceptadoOut(_Model):
+    evento_id: str
+
+
 class PrestadorAsistenciaIn(_Model):
     id: str = Field(min_length=1, max_length=40)
     nombre: str = Field(min_length=1, max_length=120)

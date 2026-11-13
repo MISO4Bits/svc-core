@@ -32,6 +32,28 @@ class PerfilamientoHttp:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def ciudad(self, cliente_id: str) -> str | None:
+        """La ciudad del perfil (la que reportó Open Data), para saber si un sismo afectó al
+        cliente. ``None`` si no se sabe; nunca lanza: esa póliza se omite y las demás siguen."""
+        ruta = f"/v1/perfiles/{quote(cliente_id, safe='')}"
+        try:
+            respuesta = await self._client.get(ruta)
+        except httpx.TransportError:
+            logger.warning(
+                "perfilamiento: sin respuesta cliente_id=%s", sanear_para_log(cliente_id)
+            )
+            return None
+        if respuesta.status_code != 200:
+            # 404: el cliente no tiene perfil (sin consentimiento). Cualquier otro: no se sabe.
+            logger.info("perfilamiento respondió %s al pedir la ciudad", respuesta.status_code)
+            return None
+        try:
+            ciudad = respuesta.json().get("ciudad")
+        except (ValueError, AttributeError):
+            logger.warning("perfilamiento devolvió una respuesta ilegible")
+            return None
+        return ciudad.strip() or None if isinstance(ciudad, str) else None
+
     async def hipotecas(self, cliente_id: str) -> CreditosReportados:
         ruta = f"/clientes/{quote(cliente_id, safe='')}/creditos-hipotecarios"
         try:
