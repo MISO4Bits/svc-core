@@ -24,16 +24,24 @@ from opentelemetry import propagate, trace
 from app.consumidores import despachar_evento
 from app.domain import DomainEvent
 from app.polizas import PolizaService
+from app.sismos import SismoService
 
 logger = logging.getLogger("svc_core.adapters.pubsub_consumer")
 tracer = trace.get_tracer("svc_core.adapters.pubsub_consumer")
 
 
 class ConsumidorPubSub:  # pragma: no cover
-    def __init__(self, project_id: str, subscription: str, polizas: PolizaService) -> None:
+    def __init__(
+        self,
+        project_id: str,
+        subscription: str,
+        polizas: PolizaService,
+        sismos: SismoService | None = None,
+    ) -> None:
         from google.cloud import pubsub_v1
 
         self._polizas = polizas
+        self._sismos = sismos
         self._subscriber = pubsub_v1.SubscriberClient()
         self._subscription_path = self._subscriber.subscription_path(project_id, subscription)
         self._future = None
@@ -66,7 +74,7 @@ class ConsumidorPubSub:  # pragma: no cover
                     id=cuerpo["id"],
                     ocurrido_en=datetime.fromisoformat(cuerpo["ocurridoEn"]),
                 )
-                await despachar_evento(self._polizas, evento)
+                await despachar_evento(self._polizas, evento, self._sismos)
             except Exception:
                 logger.exception(
                     "consumidor_pubsub: fallo procesando message_id=%s", message.message_id

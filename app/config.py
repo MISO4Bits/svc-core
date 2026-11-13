@@ -131,6 +131,10 @@ class Settings(BaseSettings):
 
     # Siniestros (BITS-381): el saldo del crédito se consulta una sola vez, al reportar, en
     # svc-perfilamiento (ruta interna). "fake" (sin hipotecas: el saldo sale de la póliza) | "http".
+    # Pago automático por sismo (BITS-386): con una magnitud menor no se crea ningún siniestro, y
+    # cuántas pólizas se evalúan a la vez (cada una puede pedir datos a svc-perfilamiento).
+    sismo_magnitud_minima: float = 5.5
+    sismo_concurrencia: int = 10
     creditos_backend: str = "fake"
     # Tráfico interno del clúster: sin TLS entre pods (igual que cotizacion_base_url).
     perfilamiento_base_url: str = (

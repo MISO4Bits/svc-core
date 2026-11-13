@@ -5,10 +5,11 @@ from __future__ import annotations
 import base64
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from app.domain import (
     ESTADOS_EN_CURSO,
+    ZONA_COLOMBIA,
     Asistencia,
     Cliente,
     Consentimiento,
@@ -29,6 +30,7 @@ from app.domain import (
     Poliza,
     PolizaYaExiste,
     Siniestro,
+    SiniestroDeSismoRepetido,
     SiniestroEnCurso,
     TipoEvidencia,
     TipoSiniestro,
@@ -340,10 +342,22 @@ class InMemoryPolizaRepository:
         return len(a_borrar)
 
 
+def _vigente_el(poliza: Poliza, fecha: date) -> bool:
+    if poliza.emitida_en is None or poliza.vigencia is None:
+        return False
+    desde = poliza.emitida_en.astimezone(ZONA_COLOMBIA).date()
+    hasta = poliza.vigencia.hasta.astimezone(ZONA_COLOMBIA).date()
+    return desde <= fecha <= hasta
+
+
 def _cumple(poliza: Poliza, filtro: FiltroPolizas, ahora: datetime) -> bool:
     if filtro.cliente_id and poliza.cliente_id != filtro.cliente_id:
         return False
     if filtro.socio_id and poliza.socio_id != filtro.socio_id:
+        return False
+    if filtro.con_cobertura and filtro.con_cobertura not in poliza.codigos_cobertura():
+        return False
+    if filtro.vigente_el and not _vigente_el(poliza, filtro.vigente_el):
         return False
     if filtro.estado and poliza.estado_en(ahora) is not filtro.estado:
         return False
@@ -409,6 +423,11 @@ class InMemorySiniestroRepository:
     async def crear(self, siniestro: Siniestro) -> None:
         if any(x.numero == siniestro.numero for x in self._items.values()):
             raise NumeroSiniestroDuplicado()
+        if siniestro.evento_id and any(
+            x.poliza_id == siniestro.poliza_id and x.evento_id == siniestro.evento_id
+            for x in self._items.values()
+        ):
+            raise SiniestroDeSismoRepetido()
         if await self.en_curso(siniestro.poliza_id, siniestro.tipo) is not None:
             raise SiniestroEnCurso()
         self._items[siniestro.id] = replace(siniestro)
@@ -434,6 +453,9 @@ class InMemorySiniestroRepository:
         ]
         ordenados = sorted(coinciden, key=lambda x: (-x.reportado_en.timestamp(), x.id))
         return [replace(x) for x in ordenados]
+
+    async def polizas_con_evento(self, evento_id: str) -> frozenset[str]:
+        return frozenset(x.poliza_id for x in self._items.values() if x.evento_id == evento_id)
 
     async def agregar_asistencia(self, siniestro_id: str, asistencia: Asistencia) -> bool:
         actual = self._items.get(siniestro_id)

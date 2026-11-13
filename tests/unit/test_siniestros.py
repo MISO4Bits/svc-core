@@ -781,3 +781,41 @@ async def test_sin_dispositivos_no_se_publica_nada():
 
 def test_el_destino_de_la_ruta_es_el_seguro():
     assert json.dumps(ruta_seguro("p")) == '{"destino": "seguro", "id": "p"}'
+
+
+# --- ciudad del cliente (BITS-386) ---
+
+
+@pytest.mark.parametrize(
+    ("respuesta", "esperada"),
+    [
+        (httpx.Response(200, json={"clienteId": "c", "ciudad": "Bogotá"}), "Bogotá"),
+        (httpx.Response(200, json={"clienteId": "c", "ciudad": "  Soacha "}), "Soacha"),
+        (httpx.Response(200, json={"clienteId": "c", "ciudad": None}), None),
+        (httpx.Response(200, json={"clienteId": "c", "ciudad": "   "}), None),
+        (httpx.Response(200, json={"clienteId": "c"}), None),
+        (httpx.Response(200, json={"clienteId": "c", "ciudad": 5}), None),
+        (httpx.Response(200, content=b"no es json"), None),
+        (httpx.Response(200, json=["lista"]), None),
+        (httpx.Response(404, json={"detail": "sin perfil"}), None),
+        (httpx.Response(503), None),
+    ],
+)
+async def test_perfilamiento_lee_la_ciudad_y_nunca_lanza(respuesta, esperada):
+    pedidos: list[httpx.Request] = []
+
+    def handler(request):
+        pedidos.append(request)
+        return respuesta
+
+    adaptador = _perfilamiento(handler)
+
+    assert await adaptador.ciudad("cli/1") == esperada
+    assert pedidos[0].url.raw_path.decode() == "/v1/perfiles/cli%2F1"
+
+
+async def test_perfilamiento_sin_respuesta_no_conoce_la_ciudad():
+    def handler(request):
+        raise httpx.ConnectError("sin red")
+
+    assert await _perfilamiento(handler).ciudad("cli-1") is None

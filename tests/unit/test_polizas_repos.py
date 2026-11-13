@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -353,3 +353,67 @@ async def test_el_envio_del_documento_se_reclama_una_sola_vez_y_se_puede_liberar
     assert await polizas.reclamar_envio_documento(p.id, AHORA)
     assert not await polizas.reclamar_envio_documento("no-existe", AHORA)
     await polizas.liberar_envio_documento("no-existe")  # silencioso
+
+
+# --- filtros del pago por sismo (BITS-386): misma regla en memoria y en SQLite ---
+
+COBERTURA_HOGAR = CoberturaContratada(
+    CodigoCobertura.HOGAR,
+    False,
+    Decimal("150000000"),
+    Decimal("14850"),
+    Decimal("2822"),
+    Decimal("17672"),
+)
+
+
+async def _emitida(polizas, evidencias, *, desde: datetime, meses: int = 12, **cambios):
+    p = poliza(pendientes=(), **cambios)
+    await polizas.crear(p)
+    await polizas.emitir(
+        p.id,
+        f"SOL-VH-{p.id[:6].upper()}",
+        desde,
+        Vigencia(desde, desde + timedelta(days=30 * meses)),
+    )
+    return p.id
+
+
+async def test_con_cobertura_filtra_las_que_tienen_esa_cobertura(repos):
+    polizas, evidencias = repos
+    con_hogar = await _emitida(
+        polizas, evidencias, desde=AHORA, coberturas=(COBERTURA, COBERTURA_HOGAR), cliente_id="a"
+    )
+    await _emitida(polizas, evidencias, desde=AHORA, cliente_id="b")
+
+    pagina = await polizas.listar(FiltroPolizas(con_cobertura=CodigoCobertura.HOGAR), AHORA)
+
+    assert [p.id for p in pagina.items] == [con_hogar]
+
+
+async def test_vigente_el_usa_el_dia_de_colombia(repos):
+    polizas, evidencias = repos
+    # Emitida el 10 a las 23:30 de Colombia (el 11 a las 04:30 UTC) y vigente 30 días.
+    desde = datetime(2026, 11, 11, 4, 30, tzinfo=UTC)
+    id_ = await _emitida(polizas, evidencias, desde=desde, meses=1)
+    hasta = (desde + timedelta(days=30)).astimezone(timezone(timedelta(hours=-5))).date()
+
+    def ids(pagina):
+        return [p.id for p in pagina.items]
+
+    async def vigente(fecha):
+        return ids(await polizas.listar(FiltroPolizas(vigente_el=fecha), AHORA))
+
+    assert await vigente(date(2026, 11, 9)) == []
+    assert await vigente(date(2026, 11, 10)) == [id_]  # el día de Colombia en que se emitió
+    assert await vigente(hasta) == [id_]  # el último día cuenta
+    assert await vigente(hasta + timedelta(days=1)) == []
+
+
+async def test_vigente_el_no_trae_las_que_no_se_han_emitido(repos):
+    polizas, _ = repos
+    await polizas.crear(poliza())
+
+    pagina = await polizas.listar(FiltroPolizas(vigente_el=date(2026, 10, 24)), AHORA)
+
+    assert pagina.items == ()

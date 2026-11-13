@@ -62,6 +62,7 @@ from app.domain import (
     PrestadorAsistencia,
     SaldoCredito,
     Siniestro,
+    SiniestroDeSismoRepetido,
     SiniestroEnCurso,
     TipoDecision,
     TipoDecisionSiniestro,
@@ -70,6 +71,7 @@ from app.domain import (
     TipoPendiente,
     TipoSiniestro,
     Vigencia,
+    dia_en_colombia,
     now_utc,
 )
 from app.logging_utils import sanear_para_log
@@ -860,6 +862,17 @@ class SqlitePolizaRepository:
         if filtro.socio_id:
             condiciones.append("socio_id = ?")
             parametros.append(filtro.socio_id)
+        if filtro.con_cobertura:
+            condiciones.append(
+                "EXISTS (SELECT 1 FROM json_each(polizas.coberturas) c "
+                "WHERE json_extract(c.value, '$.codigo') = ?)"
+            )
+            parametros.append(str(filtro.con_cobertura))
+        if filtro.vigente_el:
+            # Emitida a más tardar ese día y con la vigencia sin terminar antes de que empiece.
+            inicio, fin = dia_en_colombia(filtro.vigente_el)
+            condiciones.append("emitida_en < ? AND vigencia_hasta >= ?")
+            parametros.extend([_utc(fin), _utc(inicio)])
         if filtro.creada_desde:
             condiciones.append("creada_en >= ?")
             parametros.append(_utc(filtro.creada_desde))
@@ -1203,7 +1216,8 @@ CREATE TABLE IF NOT EXISTS siniestros (
     automatico INTEGER NOT NULL DEFAULT 0,
     evento TEXT,
     decisiones TEXT NOT NULL DEFAULT '[]',
-    asistencias TEXT NOT NULL DEFAULT '[]'
+    asistencias TEXT NOT NULL DEFAULT '[]',
+    evento_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_numero ON siniestros (numero);
 -- Un siniestro en curso por póliza y cobertura: la base lo garantiza aunque lleguen dos reportes
@@ -1223,12 +1237,18 @@ _MIGRACION_SINIESTROS = (
     "ALTER TABLE siniestros ADD COLUMN decisiones TEXT NOT NULL DEFAULT '[]'",
     # BITS-385: las solicitudes de ayuda en sitio.
     "ALTER TABLE siniestros ADD COLUMN asistencias TEXT NOT NULL DEFAULT '[]'",
+    # BITS-386: el sismo que creó un siniestro paramétrico, y la garantía de no pagarlo dos veces.
+    # El índice va después del ALTER: en una base vieja la columna todavía no existe al crear.
+    "ALTER TABLE siniestros ADD COLUMN evento_id TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_siniestros_evento ON siniestros (poliza_id, evento_id) "
+    "WHERE evento_id IS NOT NULL",
 )
 
 _COLUMNAS_SINIESTRO = (
     "id, numero, cliente_id, poliza_id, tipo, estado, fecha_ocurrencia, narracion, archivos, "
     "saldo_credito, destino_pago, reportado_en, ultima_entrega_en, actualizado_en, "
-    "evidencia_pedida, motivo_rechazo, pago, automatico, evento, decisiones, asistencias"
+    "evidencia_pedida, motivo_rechazo, pago, automatico, evento, decisiones, asistencias, "
+    "evento_id"
 )
 
 
@@ -1408,6 +1428,7 @@ def _siniestro_a_fila(x: Siniestro) -> tuple:
         json.dumps(x.evento) if x.evento is not None else None,
         _decisiones_a_json(x.decisiones),
         json.dumps([_asistencia_a_dict(a) for a in x.asistencias]),
+        x.evento_id,
     )
 
 
@@ -1440,6 +1461,7 @@ def _fila_a_siniestro(row: aiosqlite.Row) -> Siniestro:
         evento=json.loads(row["evento"]) if row["evento"] else None,
         decisiones=_json_a_decisiones(row["decisiones"]),
         asistencias=_json_a_asistencias(row["asistencias"]),
+        evento_id=row["evento_id"],
     )
 
 
@@ -1452,13 +1474,15 @@ class SqliteSiniestroRepository:
             try:
                 await conn.execute(
                     f"INSERT INTO siniestros ({_COLUMNAS_SINIESTRO}) "
-                    f"VALUES ({', '.join('?' * 21)})",
+                    f"VALUES ({', '.join('?' * 22)})",
                     _siniestro_a_fila(siniestro),
                 )
                 await conn.commit()
             except aiosqlite.IntegrityError as exc:
                 if "numero" in str(exc):
                     raise NumeroSiniestroDuplicado() from exc
+                if "evento_id" in str(exc):
+                    raise SiniestroDeSismoRepetido() from exc
                 raise SiniestroEnCurso() from exc
         logger.info(
             "sqlite: siniestro creado siniestro_id=%s tipo=%s", siniestro.id, siniestro.tipo
@@ -1511,6 +1535,13 @@ class SqliteSiniestroRepository:
                 parametros,
             )
             return [_fila_a_siniestro(r) for r in await cursor.fetchall()]
+
+    async def polizas_con_evento(self, evento_id: str) -> frozenset[str]:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "SELECT poliza_id FROM siniestros WHERE evento_id = ?", (evento_id,)
+            )
+            return frozenset(fila["poliza_id"] for fila in await cursor.fetchall())
 
     async def agregar_asistencia(self, siniestro_id: str, asistencia: Asistencia) -> bool:
         """Se agrega al arreglo y se comprueba el estado en la misma sentencia: una solicitud que
