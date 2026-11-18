@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import SecretStr
@@ -56,6 +57,11 @@ class Settings(BaseSettings):
     # dispositivos registrados del cliente y fn-notificaciones lo entrega por Firebase.
     # "off" (no avisa) | "on" (publica con el publicador de eventos de arriba).
     push_backend: str = "off"
+
+    # Renovación anual de la póliza (BITS-387). La prima nueva es la actual por (1 + IPC), sobre
+    # toda la prima. 5 % es un valor tentativo para 2026: se cambia por el dato oficial del DANE
+    # (Índice de Precios al Consumidor) con CORE_RENOVACION_IPC, sin tocar código.
+    renovacion_ipc: Decimal = Decimal("0.05")
 
     # Evidencias de identidad (BITS-275): cédula por ambas caras y selfie.
     # Verificador: "mock" (veredictos configurables) | "local" (análisis de imagen en proceso).

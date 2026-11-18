@@ -17,11 +17,13 @@ from app.domain import (
     CodigoPendiente,
     ConsentimientoScope,
     DanoHogar,
+    DecisionRenovacion,
     EstadoCliente,
     EstadoConsentimiento,
     EstadoDocumentoPoliza,
     EstadoEvidencia,
     EstadoPoliza,
+    EstadoRenovacion,
     EstadoSiniestro,
     MotivoRechazo,
     OrigenAsistencia,
@@ -218,6 +220,44 @@ class RechazoOut(_Model):
     rechazada_en: datetime
 
 
+class AvisoBancoOut(_Model):
+    entidad_acreedora: str
+    tipo: Literal["NO_RENOVACION"]
+    fecha_efectiva: datetime
+    registrado_en: datetime
+    canal: Literal["SIMULADO"]
+
+
+class RenovacionOut(_Model):
+    """La propuesta de renovación, calculada al leer. Aparece desde que se avisa el vencimiento
+    (45 días antes del aniversario)."""
+
+    estado: EstadoRenovacion
+    prima_actual: float
+    prima_nueva: float
+    ipc: float
+    fecha_renovacion: datetime
+    decidir_hasta: datetime
+    aviso_banco: AvisoBancoOut | None = None
+
+
+class DecisionRenovacionRequest(_Model):
+    decision: DecisionRenovacion
+
+
+class EjecutarRenovacionesRequest(_Model):
+    # Solo en dev: el "hoy" del trabajo, para demostrar las tres pasadas sin esperar un año.
+    fecha_corte: date | None = None
+
+
+class EjecucionRenovacionesOut(_Model):
+    corte: datetime
+    avisos_vencimiento: int
+    avisos_banco: int
+    renovadas: int
+    desactivadas: int
+
+
 class PolizaOut(_Model):
     poliza_id: str
     numero: str | None
@@ -237,6 +277,7 @@ class PolizaOut(_Model):
     documento: EstadoDocumentoOut
     documentos_aceptados: list[DocumentoAceptadoOut]
     rechazo: RechazoOut | None = None
+    renovacion: RenovacionOut | None = None
 
 
 class EvidenciaDePolizaOut(_Model):

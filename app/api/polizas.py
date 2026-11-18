@@ -10,16 +10,19 @@ import base64
 import binascii
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.api.schemas import (
+    AvisoBancoOut,
     ClienteDeVentaOut,
     CoberturaContratadaOut,
     DatosCreditoOut,
     DatosVentaOut,
     DecisionOut,
+    DecisionRenovacionRequest,
     DecisionRequest,
     DetallePendienteOut,
     DocumentoAceptadoOut,
@@ -34,6 +37,7 @@ from app.api.schemas import (
     PolizaOut,
     PolizaResumenOut,
     RechazoOut,
+    RenovacionOut,
     SolicitarPolizaRequest,
     VigenciaOut,
 )
@@ -47,9 +51,11 @@ from app.domain import (
     SolicitudPolizaInvalida,
     TipoPendiente,
     now_utc,
+    propuesta_de_renovacion,
 )
 from app.logging_utils import sanear_para_log
 from app.polizas import PolizaService
+from app.renovaciones import RenovacionService
 
 logger = logging.getLogger("svc_core.api")
 router = APIRouter()
@@ -64,8 +70,42 @@ def get_polizas(request: Request) -> PolizaService:
 PolizasDep = Annotated[PolizaService, Depends(get_polizas)]
 
 
-def a_poliza_out(poliza: Poliza) -> PolizaOut:
-    return PolizaOut(**_campos_poliza(poliza))
+def get_renovaciones(request: Request) -> RenovacionService:
+    return request.app.state.renovaciones
+
+
+RenovacionesDep = Annotated[RenovacionService, Depends(get_renovaciones)]
+
+
+def a_poliza_out(poliza: Poliza, ipc: Decimal | None = None) -> PolizaOut:
+    """``ipc`` solo lo pasan las rutas que le muestran la renovación al cliente."""
+    return PolizaOut(**_campos_poliza(poliza), renovacion=_renovacion_out(poliza, ipc))
+
+
+def _renovacion_out(p: Poliza, ipc: Decimal | None) -> RenovacionOut | None:
+    if ipc is None:
+        return None
+    propuesta = propuesta_de_renovacion(p, ipc)
+    if propuesta is None:
+        return None
+    banco = propuesta.aviso_banco
+    return RenovacionOut(
+        estado=propuesta.estado,
+        prima_actual=float(propuesta.prima_actual),
+        prima_nueva=float(propuesta.prima_nueva),
+        ipc=float(propuesta.ipc),
+        fecha_renovacion=propuesta.fecha_renovacion,
+        decidir_hasta=propuesta.decidir_hasta,
+        aviso_banco=AvisoBancoOut(
+            entidad_acreedora=banco.entidad_acreedora,
+            tipo=banco.tipo,
+            fecha_efectiva=banco.fecha_efectiva,
+            registrado_en=banco.registrado_en,
+            canal=banco.canal,
+        )
+        if banco
+        else None,
+    )
 
 
 def _campos_poliza(p: Poliza) -> dict:
@@ -207,24 +247,49 @@ async def solicitar_poliza(
 async def listar_polizas_de_cliente(
     cliente_id: str,
     service: PolizasDep,
+    renovaciones: RenovacionesDep,
     estado: Annotated[EstadoPoliza | None, Query()] = None,
 ) -> list[PolizaOut]:
     logger.info("GET /v1/clientes/%s/polizas: solicitud recibida", sanear_para_log(cliente_id))
-    return [a_poliza_out(p) for p in await service.listar_de_cliente(cliente_id, estado)]
+    return [
+        a_poliza_out(p, renovaciones.ipc)
+        for p in await service.listar_de_cliente(cliente_id, estado)
+    ]
 
 
 @router.get(
     "/clientes/{cliente_id}/polizas/{poliza_id}", response_model=PolizaOut, tags=["Pólizas"]
 )
 async def obtener_poliza_de_cliente(
-    cliente_id: str, poliza_id: str, service: PolizasDep
+    cliente_id: str, poliza_id: str, service: PolizasDep, renovaciones: RenovacionesDep
 ) -> PolizaOut:
     logger.info(
         "GET /v1/clientes/%s/polizas/%s: solicitud recibida",
         sanear_para_log(cliente_id),
         sanear_para_log(poliza_id),
     )
-    return a_poliza_out(await service.obtener(cliente_id, poliza_id))
+    return a_poliza_out(await service.obtener(cliente_id, poliza_id), renovaciones.ipc)
+
+
+@router.post(
+    "/clientes/{cliente_id}/polizas/{poliza_id}/renovacion",
+    response_model=PolizaOut,
+    tags=["Pólizas"],
+)
+async def decidir_renovacion(
+    cliente_id: str,
+    poliza_id: str,
+    payload: DecisionRenovacionRequest,
+    renovaciones: RenovacionesDep,
+) -> PolizaOut:
+    logger.info(
+        "POST /v1/clientes/%s/polizas/%s/renovacion: solicitud recibida decision=%s",
+        sanear_para_log(cliente_id),
+        sanear_para_log(poliza_id),
+        payload.decision,
+    )
+    poliza = await renovaciones.decidir(cliente_id, poliza_id, payload.decision)
+    return a_poliza_out(poliza, renovaciones.ipc)
 
 
 @router.get(

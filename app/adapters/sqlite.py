@@ -20,6 +20,7 @@ from app.domain import (
     ESTADOS_EN_CURSO,
     ArchivoSiniestro,
     Asistencia,
+    AvisoBanco,
     BeneficiarioPago,
     Canal,
     ClaseArchivo,
@@ -34,6 +35,7 @@ from app.domain import (
     DatosCredito,
     DatosVenta,
     Decision,
+    DecisionRenovacion,
     DecisionSiniestro,
     Dispositivo,
     DocumentoAceptado,
@@ -60,6 +62,8 @@ from app.domain import (
     Poliza,
     PolizaYaExiste,
     PrestadorAsistencia,
+    Renovacion,
+    RenovacionRealizada,
     SaldoCredito,
     Siniestro,
     SiniestroDeSismoRepetido,
@@ -177,6 +181,8 @@ class SqliteDatabase:
                 # BITS-378: la venta directa del socio, en bases de dev anteriores.
                 "ALTER TABLE polizas ADD COLUMN socio_id TEXT",
                 "ALTER TABLE polizas ADD COLUMN datos_venta TEXT",
+                # BITS-387: la renovación (marcas, decisión, aviso al banco, historial).
+                "ALTER TABLE polizas ADD COLUMN renovacion TEXT",
                 # BITS-380: la lista de pólizas de cada socio. Va después del ALTER: en una base
                 # vieja la columna todavía no existe cuando corre el esquema.
                 "CREATE INDEX IF NOT EXISTS idx_polizas_socio ON polizas (socio_id, creada_en)",
@@ -690,6 +696,7 @@ def _poliza_a_fila(p: Poliza) -> tuple:
         _iso(p.documento_enviado_en and p.documento_enviado_en.astimezone(UTC)),
         p.socio_id,
         json.dumps(_datos_venta_a_dict(p.datos_venta)) if p.datos_venta else None,
+        json.dumps(_renovacion_a_dict(p.renovacion)),
     )
 
 
@@ -708,12 +715,87 @@ def _datos_venta_de_fila(texto: str | None) -> DatosVenta | None:
     return DatosVenta(d["direccion"], d["municipio"], Decimal(d["cuotaMensual"]))
 
 
+def _vigencia_a_dict(v: Vigencia) -> dict:
+    return {"desde": _utc(v.desde), "hasta": _utc(v.hasta)}
+
+
+def _vigencia_de_dict(d: dict) -> Vigencia:
+    return Vigencia(datetime.fromisoformat(d["desde"]), datetime.fromisoformat(d["hasta"]))
+
+
+def _renovacion_a_dict(r: Renovacion) -> dict:
+    def fecha(valor: datetime | None) -> str | None:
+        return _utc(valor) if valor else None
+
+    return {
+        "decision": str(r.decision) if r.decision else None,
+        "decididaEn": fecha(r.decidida_en),
+        "avisoVencimientoEn": fecha(r.aviso_vencimiento_en),
+        "decisionCerradaEn": fecha(r.decision_cerrada_en),
+        "avisoBanco": {
+            "entidadAcreedora": r.aviso_banco.entidad_acreedora,
+            "tipo": r.aviso_banco.tipo,
+            "fechaEfectiva": _utc(r.aviso_banco.fecha_efectiva),
+            "registradoEn": _utc(r.aviso_banco.registrado_en),
+            "canal": r.aviso_banco.canal,
+        }
+        if r.aviso_banco
+        else None,
+        "desactivadaEn": fecha(r.desactivada_en),
+        "historial": [
+            {
+                "renovadaEn": _utc(h.renovada_en),
+                "vigenciaAnterior": _vigencia_a_dict(h.vigencia_anterior),
+                "vigenciaNueva": _vigencia_a_dict(h.vigencia_nueva),
+                "primaAnterior": str(h.prima_anterior),
+                "primaNueva": str(h.prima_nueva),
+                "ipc": str(h.ipc),
+            }
+            for h in r.historial
+        ],
+    }
+
+
+def _renovacion_de_fila(texto: str | None) -> Renovacion:
+    if not texto:
+        return Renovacion()
+    d = json.loads(texto)
+    banco = d.get("avisoBanco")
+    return Renovacion(
+        decision=DecisionRenovacion(d["decision"]) if d.get("decision") else None,
+        decidida_en=_dt(d.get("decididaEn")),
+        aviso_vencimiento_en=_dt(d.get("avisoVencimientoEn")),
+        decision_cerrada_en=_dt(d.get("decisionCerradaEn")),
+        aviso_banco=AvisoBanco(
+            entidad_acreedora=banco["entidadAcreedora"],
+            tipo=banco["tipo"],
+            fecha_efectiva=datetime.fromisoformat(banco["fechaEfectiva"]),
+            registrado_en=datetime.fromisoformat(banco["registradoEn"]),
+            canal=banco["canal"],
+        )
+        if banco
+        else None,
+        desactivada_en=_dt(d.get("desactivadaEn")),
+        historial=tuple(
+            RenovacionRealizada(
+                renovada_en=datetime.fromisoformat(h["renovadaEn"]),
+                vigencia_anterior=_vigencia_de_dict(h["vigenciaAnterior"]),
+                vigencia_nueva=_vigencia_de_dict(h["vigenciaNueva"]),
+                prima_anterior=Decimal(h["primaAnterior"]),
+                prima_nueva=Decimal(h["primaNueva"]),
+                ipc=Decimal(h["ipc"]),
+            )
+            for h in d.get("historial", [])
+        ),
+    )
+
+
 _COLUMNAS_POLIZA = (
     "id, cliente_id, cotizacion_creada_en, solicitud_vigente_hasta, estado, coberturas, "
     "datos_credito, origen_datos, tasa, version_tarifa, cobertura_meses, edad, "
     "documentos_aceptados, pendientes, decisiones, motivos_rechazo, evidencias, numero, "
     "emitida_en, vigencia_desde, vigencia_hasta, rechazada_en, creada_en, ultima_evaluacion_en, "
-    "documento_enviado_en, socio_id, datos_venta"
+    "documento_enviado_en, socio_id, datos_venta, renovacion"
 )
 
 
@@ -765,6 +847,7 @@ def _fila_a_poliza(row: aiosqlite.Row) -> Poliza:
         documento_enviado_en=_dt(row["documento_enviado_en"]),
         socio_id=row["socio_id"],
         datos_venta=_datos_venta_de_fila(row["datos_venta"]),
+        renovacion=_renovacion_de_fila(row["renovacion"]),
     )
 
 
@@ -788,7 +871,7 @@ class SqlitePolizaRepository:
         async with self._db.connect() as conn:
             try:
                 await conn.execute(
-                    f"INSERT INTO polizas ({_COLUMNAS_POLIZA}) VALUES ({', '.join('?' * 27)})",
+                    f"INSERT INTO polizas ({_COLUMNAS_POLIZA}) VALUES ({', '.join('?' * 28)})",
                     _poliza_a_fila(poliza),
                 )
                 await conn.commit()
@@ -1039,6 +1122,62 @@ class SqlitePolizaRepository:
             )
             await conn.commit()
 
+    async def emitidas(self) -> list[Poliza]:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                f"SELECT {_COLUMNAS_POLIZA} FROM polizas WHERE estado = 'EMITIDA' "
+                "ORDER BY vigencia_hasta, id"
+            )
+            return [_fila_a_poliza(row) for row in await cursor.fetchall()]
+
+    async def guardar_renovacion(self, poliza_id: str, renovacion: Renovacion) -> None:
+        async with self._db.connect() as conn:
+            await conn.execute(
+                "UPDATE polizas SET renovacion = ? WHERE id = ?",
+                (json.dumps(_renovacion_a_dict(renovacion)), poliza_id),
+            )
+            await conn.commit()
+
+    async def renovar(
+        self,
+        poliza_id: str,
+        hasta_esperado: datetime,
+        vigencia: Vigencia,
+        coberturas: tuple[CoberturaContratada, ...],
+        renovacion: Renovacion,
+    ) -> Poliza | None:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "UPDATE polizas SET vigencia_desde = ?, vigencia_hasta = ?, coberturas = ?, "
+                "renovacion = ? WHERE id = ? AND estado = 'EMITIDA' AND vigencia_hasta = ?",
+                (
+                    _utc(vigencia.desde),
+                    _utc(vigencia.hasta),
+                    json.dumps([_cobertura_a_dict(c) for c in coberturas]),
+                    json.dumps(_renovacion_a_dict(renovacion)),
+                    poliza_id,
+                    _utc(hasta_esperado),
+                ),
+            )
+            await conn.commit()
+            if cursor.rowcount != 1:
+                return None
+            return await self._leer(conn, poliza_id)
+
+    async def desactivar(
+        self, poliza_id: str, hasta_esperado: datetime, renovacion: Renovacion
+    ) -> Poliza | None:
+        async with self._db.connect() as conn:
+            cursor = await conn.execute(
+                "UPDATE polizas SET estado = 'DESACTIVADA', renovacion = ? "
+                "WHERE id = ? AND estado = 'EMITIDA' AND vigencia_hasta = ?",
+                (json.dumps(_renovacion_a_dict(renovacion)), poliza_id, _utc(hasta_esperado)),
+            )
+            await conn.commit()
+            if cursor.rowcount != 1:
+                return None
+            return await self._leer(conn, poliza_id)
+
     async def borrar_pendientes_de_cliente(
         self, cliente_id: str, salvo_cotizacion: datetime | None
     ) -> int:
@@ -1087,6 +1226,7 @@ CREATE TABLE IF NOT EXISTS polizas (
     documento_enviado_en TEXT,
     socio_id TEXT,
     datos_venta TEXT,
+    renovacion TEXT,
     UNIQUE (cliente_id, cotizacion_creada_en)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_polizas_numero ON polizas (numero) WHERE numero IS NOT NULL;

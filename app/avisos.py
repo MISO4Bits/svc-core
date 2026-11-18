@@ -32,6 +32,9 @@ class Aviso(StrEnum):
     SINIESTRO_RECHAZADO = "SINIESTRO_RECHAZADO"
     SINIESTRO_PAGADO = "SINIESTRO_PAGADO"
     SINIESTRO_PAGO_AUTOMATICO = "SINIESTRO_PAGO_AUTOMATICO"
+    RENOVACION_VENCIMIENTO = "RENOVACION_VENCIMIENTO"
+    RENOVACION_RENOVADA = "RENOVACION_RENOVADA"
+    RENOVACION_DESACTIVADA = "RENOVACION_DESACTIVADA"
 
 
 # (título, cuerpo) de cada aviso. Sin montos: se leen con el teléfono bloqueado.
@@ -52,6 +55,18 @@ TEXTOS: dict[Aviso, tuple[str, str]] = {
     Aviso.SINIESTRO_PAGO_AUTOMATICO: (
         "Te pagamos solos",
         "Un sismo afectó tu municipio y ya pagamos la cuota de tu crédito.",
+    ),
+    Aviso.RENOVACION_VENCIMIENTO: (
+        "Tu seguro está por renovarse",
+        "Abre tu seguro para ver la propuesta de renovación y decidir.",
+    ),
+    Aviso.RENOVACION_RENOVADA: (
+        "Renovamos tu seguro",
+        "Tu póliza sigue activa por un año más. Abre tu seguro para ver el detalle.",
+    ),
+    Aviso.RENOVACION_DESACTIVADA: (
+        "Tu seguro se desactivó",
+        "No renovaste tu póliza. Abre tu seguro para ver el detalle.",
     ),
 }
 

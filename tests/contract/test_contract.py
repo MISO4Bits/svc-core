@@ -38,6 +38,7 @@ def _app_operations(app) -> set[tuple[str, str]]:
                 "/v1/siniestros",
                 "/v1/evidencias-identidad",
                 "/v1/eventos-sismicos",
+                "/v1/renovaciones",
             )
         ):
             continue

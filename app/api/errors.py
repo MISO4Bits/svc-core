@@ -15,6 +15,7 @@ from app.domain import (
     ClientesDistintos,
     ClienteYaExiste,
     ConflictoPoliza,
+    ConflictoRenovacion,
     ConflictoSiniestro,
     ConsentimientoNoEncontrado,
     CorreoInternoInvalido,
@@ -190,6 +191,16 @@ def install_error_handlers(app: FastAPI) -> None:
         request: Request, exc: SiniestroNoEncontrado
     ) -> JSONResponse:
         return problema(404, "Siniestro no encontrado", detail=str(exc), instance=str(request.url))
+
+    @app.exception_handler(ConflictoRenovacion)
+    async def _conflicto_renovacion(request: Request, exc: ConflictoRenovacion) -> JSONResponse:
+        return problema(
+            409,
+            "Conflicto con la renovación",
+            detail=str(exc),
+            instance=str(request.url),
+            codigo=exc.codigo,
+        )
 
     @app.exception_handler(ConflictoSiniestro)
     async def _conflicto_siniestro(request: Request, exc: ConflictoSiniestro) -> JSONResponse:

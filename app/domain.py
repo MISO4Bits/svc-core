@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -436,6 +436,86 @@ class DatosVenta:
     cuota_mensual: Decimal
 
 
+class DecisionRenovacion(StrEnum):
+    ACEPTAR = "ACEPTAR"
+    RECHAZAR = "RECHAZAR"
+
+
+class EstadoRenovacion(StrEnum):
+    SIN_RESPUESTA = "SIN_RESPUESTA"
+    ACEPTADA = "ACEPTADA"
+    RECHAZADA = "RECHAZADA"
+
+
+# Días antes del aniversario en que corre cada pasada del trabajo de renovación (BITS-387).
+DIAS_AVISO_VENCIMIENTO = 45
+DIAS_AVISO_BANCO = 30
+TIPO_AVISO_NO_RENOVACION = "NO_RENOVACION"
+CANAL_AVISO_SIMULADO = "SIMULADO"
+
+
+@dataclass(frozen=True)
+class AvisoBanco:
+    """El aviso a la entidad acreedora de que la póliza no se renueva. Simulado: no sale nada."""
+
+    entidad_acreedora: str
+    tipo: str
+    fecha_efectiva: datetime
+    registrado_en: datetime
+    canal: str = CANAL_AVISO_SIMULADO
+
+
+@dataclass(frozen=True)
+class RenovacionRealizada:
+    """Una renovación ya hecha: queda en el historial de la póliza."""
+
+    renovada_en: datetime
+    vigencia_anterior: Vigencia
+    vigencia_nueva: Vigencia
+    prima_anterior: Decimal
+    prima_nueva: Decimal
+    ipc: Decimal
+
+
+@dataclass(frozen=True)
+class Renovacion:
+    """Lo que la póliza guarda de su renovación. Las marcas son las del ciclo en curso (un
+    aniversario) y empiezan de cero al renovar; ``historial`` es de toda la vida de la póliza.
+
+    La propuesta no se guarda: se calcula al leer. ``aviso_vencimiento_en`` es la marca de que
+    ya se avisó, y desde ahí el cliente puede decidir."""
+
+    decision: DecisionRenovacion | None = None
+    decidida_en: datetime | None = None
+    aviso_vencimiento_en: datetime | None = None
+    # A partir de los 30 días antes el cliente ya no cambia su decisión.
+    decision_cerrada_en: datetime | None = None
+    aviso_banco: AvisoBanco | None = None
+    desactivada_en: datetime | None = None
+    historial: tuple[RenovacionRealizada, ...] = ()
+
+    @property
+    def estado(self) -> EstadoRenovacion:
+        if self.decision is DecisionRenovacion.ACEPTAR:
+            return EstadoRenovacion.ACEPTADA
+        if self.decision is DecisionRenovacion.RECHAZAR:
+            return EstadoRenovacion.RECHAZADA
+        return EstadoRenovacion.SIN_RESPUESTA
+
+
+@dataclass(frozen=True)
+class PropuestaRenovacion:
+    """La renovación tal como se le muestra al cliente."""
+
+    estado: EstadoRenovacion
+    prima_actual: Decimal
+    prima_nueva: Decimal
+    ipc: Decimal
+    fecha_renovacion: datetime
+    decidir_hasta: datetime
+    aviso_banco: AvisoBanco | None
+
+
 @dataclass
 class Poliza:
     """La solicitud de póliza y, cuando se emite, la póliza. Las cifras son la foto de la
@@ -469,6 +549,7 @@ class Poliza:
     # Solo la venta directa del socio (BITS-378): quién la vendió y lo que capturó.
     socio_id: str | None = None
     datos_venta: DatosVenta | None = None
+    renovacion: Renovacion = field(default_factory=Renovacion)
 
     @property
     def prima_total_mensual(self) -> Decimal:
@@ -693,6 +774,52 @@ def sumar_meses(inicio: datetime, meses: int) -> datetime:
     primero_del_siguiente = date(anio + (mes == 12), mes % 12 + 1, 1)
     ultimo_dia = (primero_del_siguiente - timedelta(days=1)).day
     return inicio.replace(year=anio, month=mes, day=min(inicio.day, ultimo_dia))
+
+
+# La vigencia de la póliza es de un año desde la emisión y se renueva en el aniversario
+# (BITS-395). Es independiente del plazo restante del crédito.
+MESES_VIGENCIA = 12
+
+_PESO = Decimal(1)
+
+
+def _redondear_peso(valor: Decimal) -> Decimal:
+    return valor.quantize(_PESO, rounding=ROUND_HALF_UP)
+
+
+def escalar_coberturas(
+    coberturas: tuple[CoberturaContratada, ...], ipc: Decimal
+) -> tuple[CoberturaContratada, ...]:
+    """La prima de cada cobertura por ``1 + ipc``, en pesos enteros. El total es la neta más el
+    IVA ya redondeados, para que las tres cifras de una cobertura sigan sumando."""
+    factor = 1 + ipc
+    escaladas = []
+    for c in coberturas:
+        neta = _redondear_peso(c.prima_neta * factor)
+        iva = _redondear_peso(c.iva * factor)
+        escaladas.append(replace(c, prima_neta=neta, iva=iva, prima_total=neta + iva))
+    return tuple(escaladas)
+
+
+def prima_total(coberturas: tuple[CoberturaContratada, ...]) -> Decimal:
+    return sum((c.prima_total for c in coberturas), Decimal(0))
+
+
+def propuesta_de_renovacion(poliza: Poliza, ipc: Decimal) -> PropuestaRenovacion | None:
+    """``None`` mientras no se haya avisado el vencimiento (o si la póliza no tiene vigencia)."""
+    r = poliza.renovacion
+    if poliza.vigencia is None or r.aviso_vencimiento_en is None:
+        return None
+    hasta = poliza.vigencia.hasta
+    return PropuestaRenovacion(
+        estado=r.estado,
+        prima_actual=poliza.prima_total_mensual,
+        prima_nueva=prima_total(escalar_coberturas(poliza.coberturas, ipc)),
+        ipc=ipc,
+        fecha_renovacion=hasta,
+        decidir_hasta=hasta - timedelta(days=DIAS_AVISO_BANCO),
+        aviso_banco=r.aviso_banco,
+    )
 
 
 def generar_numero_poliza(emitida_en: datetime, aleatorio: Callable[[str], str]) -> str:
@@ -1066,6 +1193,26 @@ class ValorSuperaSumaAsegurada(DomainError):
     def __init__(self, suma_asegurada: Decimal) -> None:
         super().__init__(f"El valor no puede superar la suma asegurada ({suma_asegurada})")
         self.suma_asegurada = suma_asegurada
+
+
+class ConflictoRenovacion(DomainError):
+    """La renovación no admite esa decisión ahora (409, con un ``codigo`` estable)."""
+
+    codigo = "CONFLICTO"
+
+
+class SinPropuestaDeRenovacion(ConflictoRenovacion):
+    codigo = "SIN_PROPUESTA"
+
+    def __init__(self) -> None:
+        super().__init__("La póliza todavía no tiene una propuesta de renovación")
+
+
+class PlazoDeRenovacionVencido(ConflictoRenovacion):
+    codigo = "PLAZO_VENCIDO"
+
+    def __init__(self) -> None:
+        super().__init__("Ya pasó el plazo para decidir sobre la renovación")
 
 
 class FueraDeVigencia(ConflictoSiniestro):
