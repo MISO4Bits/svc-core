@@ -549,6 +549,42 @@ paths:
           $ref: '#/components/responses/NoEncontrado'
       security:
       - serviceAuth: []
+  /v1/clientes/{clienteId}/polizas/{polizaId}/renovacion:
+    parameters:
+    - $ref: '#/components/parameters/ClienteId'
+    - $ref: '#/components/parameters/PolizaId'
+    post:
+      operationId: decidirRenovacion
+      tags:
+      - Pólizas
+      summary: Acepta o rechaza la renovación de la póliza (BITS-387)
+      description: |
+        Desde el aviso de vencimiento (45 días antes del aniversario) hasta 30 días antes. El
+        cliente puede cambiar su decisión mientras no se cierre. Sin respuesta, la póliza se
+        renueva. Devuelve la póliza con `renovacion` al día.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRenovacionRequest'
+      responses:
+        '200':
+          description: La póliza con la decisión registrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Poliza'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          description: Todavía no hay propuesta (`SIN_PROPUESTA`) o ya pasó el plazo (`PLAZO_VENCIDO`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemaRenovacion'
+      security:
+      - serviceAuth: []
   /v1/clientes/{clienteId}/polizas/{polizaId}/documento:
     parameters:
     - $ref: '#/components/parameters/ClienteId'
@@ -1143,6 +1179,35 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemaSiniestro' }
 
+  /v1/renovaciones/ejecutar:
+    post:
+      operationId: ejecutarRenovaciones
+      tags: [Renovaciones]
+      summary: Corre el trabajo diario de renovación (BITS-387)
+      description: |
+        Interno y sin BFF: lo llama el CronJob de `deploy` una vez al día; una `NetworkPolicy`
+        solo deja entrar a ese pod. Hace tres pasadas sobre las pólizas `EMITIDA`:
+
+        1. 45 días antes del aniversario: aviso de vencimiento (desde ahí el cliente decide).
+        2. 30 días antes: cierra la decisión y, si rechazó, registra el aviso al banco (simulado).
+        3. Aniversario: renueva (12 meses y prima por `1 + IPC`) o deja `DESACTIVADA`.
+
+        Es idempotente: cada pasada deja su marca en la póliza, así que correrlo dos veces el
+        mismo día no repite avisos ni renueva dos veces. `fechaCorte` simula el «hoy» y solo se
+        acepta en `dev`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EjecutarRenovacionesRequest' }
+      responses:
+        '200':
+          description: Lo que hizo cada pasada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EjecucionRenovaciones' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+
   /v1/eventos-sismicos:
     post:
       operationId: reportarSismo
@@ -1652,6 +1717,16 @@ components:
             - PENDIENTE_NO_APLICA
             - DOCUMENTO_NO_DISPONIBLE
             - IDENTIDAD_NO_DISPONIBLE
+    ProblemaRenovacion:
+      allOf:
+      - $ref: '#/components/schemas/Problema'
+      - type: object
+        properties:
+          codigo:
+            type: string
+            enum:
+            - SIN_PROPUESTA
+            - PLAZO_VENCIDO
     CodigoPendiente:
       type: string
       enum:
@@ -1770,6 +1845,122 @@ components:
             rechazadaEn:
               type: string
               format: date-time
+        renovacion:
+          oneOf:
+          - $ref: '#/components/schemas/Renovacion'
+          - type: 'null'
+          description: |
+            La propuesta de renovación, calculada al leer. Aparece desde el aviso de vencimiento
+            (45 días antes del aniversario) y sigue en la póliza `DESACTIVADA`. `null` antes.
+    Renovacion:
+      type: object
+      additionalProperties: false
+      required:
+      - estado
+      - primaActual
+      - primaNueva
+      - ipc
+      - fechaRenovacion
+      - decidirHasta
+      properties:
+        estado:
+          type: string
+          enum:
+          - SIN_RESPUESTA
+          - ACEPTADA
+          - RECHAZADA
+          description: Sin respuesta, la póliza se renueva.
+        primaActual:
+          type: number
+          description: Prima mensual total vigente (vida y Tu casa).
+        primaNueva:
+          type: number
+          description: '`primaActual` por (1 + `ipc`), sobre toda la prima, en pesos enteros.'
+        ipc:
+          type: number
+          example: 0.05
+          description: Índice de Precios al Consumidor aplicado (parámetro de configuración).
+        fechaRenovacion:
+          type: string
+          format: date-time
+          description: El aniversario (`vigencia.hasta`).
+        decidirHasta:
+          type: string
+          format: date-time
+          description: 30 días antes del aniversario; después el cliente ya no cambia su decisión.
+        avisoBanco:
+          oneOf:
+          - $ref: '#/components/schemas/AvisoBanco'
+          - type: 'null'
+          description: Solo si rechazó y ya se registró el aviso (30 días antes).
+    AvisoBanco:
+      type: object
+      additionalProperties: false
+      required:
+      - entidadAcreedora
+      - tipo
+      - fechaEfectiva
+      - registradoEn
+      - canal
+      properties:
+        entidadAcreedora:
+          type: string
+        tipo:
+          type: string
+          enum:
+          - NO_RENOVACION
+        fechaEfectiva:
+          type: string
+          format: date-time
+        registradoEn:
+          type: string
+          format: date-time
+        canal:
+          type: string
+          enum:
+          - SIMULADO
+    DecisionRenovacionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - decision
+      properties:
+        decision:
+          type: string
+          enum:
+          - ACEPTAR
+          - RECHAZAR
+    EjecutarRenovacionesRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        fechaCorte:
+          type:
+          - string
+          - 'null'
+          format: date
+          description: El «hoy» del trabajo. Solo en `dev`; en otro ambiente responde 400.
+    EjecucionRenovaciones:
+      type: object
+      additionalProperties: false
+      required:
+      - corte
+      - avisosVencimiento
+      - avisosBanco
+      - renovadas
+      - desactivadas
+      properties:
+        corte:
+          type: string
+          format: date-time
+        avisosVencimiento:
+          type: integer
+        avisosBanco:
+          type: integer
+        renovadas:
+          type: integer
+        desactivadas:
+          type: integer
     SolicitarPolizaRequest:
       type: object
       additionalProperties: false

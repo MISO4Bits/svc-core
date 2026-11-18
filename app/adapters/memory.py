@@ -12,6 +12,7 @@ from app.domain import (
     ZONA_COLOMBIA,
     Asistencia,
     Cliente,
+    CoberturaContratada,
     Consentimiento,
     ConsentimientoScope,
     Decision,
@@ -29,6 +30,7 @@ from app.domain import (
     Pendiente,
     Poliza,
     PolizaYaExiste,
+    Renovacion,
     Siniestro,
     SiniestroDeSismoRepetido,
     SiniestroEnCurso,
@@ -323,6 +325,51 @@ class InMemoryPolizaRepository:
         poliza = self._items.get(poliza_id)
         if poliza is not None:
             poliza.documento_enviado_en = None
+
+    async def emitidas(self) -> list[Poliza]:
+        return [replace(p) for p in self._items.values() if p.estado is EstadoPoliza.EMITIDA]
+
+    async def guardar_renovacion(self, poliza_id: str, renovacion: Renovacion) -> None:
+        poliza = self._items.get(poliza_id)
+        if poliza is not None:
+            poliza.renovacion = renovacion
+
+    def _vigente_hasta(self, poliza_id: str, hasta_esperado: datetime) -> Poliza | None:
+        poliza = self._items.get(poliza_id)
+        if (
+            poliza is None
+            or poliza.estado is not EstadoPoliza.EMITIDA
+            or poliza.vigencia is None
+            or _en_utc(poliza.vigencia.hasta) != _en_utc(hasta_esperado)
+        ):
+            return None
+        return poliza
+
+    async def renovar(
+        self,
+        poliza_id: str,
+        hasta_esperado: datetime,
+        vigencia: Vigencia,
+        coberturas: tuple[CoberturaContratada, ...],
+        renovacion: Renovacion,
+    ) -> Poliza | None:
+        poliza = self._vigente_hasta(poliza_id, hasta_esperado)
+        if poliza is None:
+            return None
+        poliza.vigencia = vigencia
+        poliza.coberturas = coberturas
+        poliza.renovacion = renovacion
+        return replace(poliza)
+
+    async def desactivar(
+        self, poliza_id: str, hasta_esperado: datetime, renovacion: Renovacion
+    ) -> Poliza | None:
+        poliza = self._vigente_hasta(poliza_id, hasta_esperado)
+        if poliza is None:
+            return None
+        poliza.estado = EstadoPoliza.DESACTIVADA
+        poliza.renovacion = renovacion
+        return replace(poliza)
 
     async def borrar_pendientes_de_cliente(
         self, cliente_id: str, salvo_cotizacion: datetime | None

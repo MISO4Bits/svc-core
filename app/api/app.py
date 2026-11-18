@@ -27,6 +27,7 @@ from app.api.dispositivos import router as dispositivos_router
 from app.api.errors import install_error_handlers
 from app.api.evidencias import router as evidencias_router
 from app.api.polizas import router as polizas_router
+from app.api.renovaciones import router as renovaciones_router
 from app.api.routes import router
 from app.api.siniestros import router as siniestros_router
 from app.api.siniestros_internos import router as siniestros_internos_router
@@ -40,6 +41,7 @@ from app.dispositivos import DispositivoService
 from app.evidencias import EvidenciaService
 from app.logging_utils import SinRuidoDeHealthCheck
 from app.polizas import PolizaService
+from app.renovaciones import RenovacionService
 from app.services import IdentityService
 from app.sismos import SismoService
 from app.telemetry import agregar_encabezado_trace_id, setup_telemetry, shutdown_telemetry
@@ -100,6 +102,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         avisos=avisos,
         documentos_legales=documentos_legales,
     )
+    renovaciones = RenovacionService(repo_polizas, avisos, ipc=settings.renovacion_ipc)
     dispositivos = DispositivoService(clientes, repo_dispositivos)
     # Si el cliente cumple algo que le faltaba a su póliza pendiente, esta se vuelve a evaluar.
     service = IdentityService(
@@ -198,6 +201,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.notificaciones = notificaciones
     app.state.evidencias = evidencias
     app.state.polizas = polizas
+    app.state.renovaciones = renovaciones
     app.state.dispositivos = dispositivos
     app.state.cuentas_internas = cuentas_internas
     app.state.siniestros = siniestros
@@ -213,6 +217,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(siniestros_router, prefix="/v1")
     app.include_router(siniestros_internos_router, prefix="/v1")
     app.include_router(sismos_router, prefix="/v1")
+    app.include_router(renovaciones_router, prefix="/v1")
     app.include_router(ventas_router, prefix="/v1")
 
     @app.get("/health", include_in_schema=False)

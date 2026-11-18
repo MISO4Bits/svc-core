@@ -9,6 +9,7 @@ from typing import Protocol, runtime_checkable
 from app.domain import (
     Asistencia,
     Cliente,
+    CoberturaContratada,
     Consentimiento,
     ConsentimientoScope,
     CotizacionActiva,
@@ -28,6 +29,7 @@ from app.domain import (
     PlantillaCorreo,
     Poliza,
     ReferenciaDocumento,
+    Renovacion,
     RolInterno,
     Siniestro,
     TipoCorreo,
@@ -283,6 +285,33 @@ class PolizaRepository(Protocol):
     ) -> int:
         """Borra las ``PENDIENTE`` del cliente cuya cotización no sea ``salvo_cotizacion``
         (todas si es ``None``). No toca emitidas ni rechazadas. Devuelve cuántas borró."""
+        ...
+
+    async def emitidas(self) -> list[Poliza]:
+        """Todas las ``EMITIDA``: las que revisa el trabajo diario de renovación (BITS-387)."""
+        ...
+
+    async def guardar_renovacion(self, poliza_id: str, renovacion: Renovacion) -> None:
+        """Reemplaza la columna ``renovacion`` (marcas, decisión, aviso al banco, historial)."""
+        ...
+
+    async def renovar(
+        self,
+        poliza_id: str,
+        hasta_esperado: datetime,
+        vigencia: Vigencia,
+        coberturas: tuple[CoberturaContratada, ...],
+        renovacion: Renovacion,
+    ) -> Poliza | None:
+        """En una sola operación: vigencia nueva, primas nuevas y ``renovacion``. Solo si la
+        póliza sigue ``EMITIDA`` con ``vigencia.hasta == hasta_esperado``: así una segunda
+        ejecución del trabajo no renueva dos veces. ``None`` si ya no cumplía."""
+        ...
+
+    async def desactivar(
+        self, poliza_id: str, hasta_esperado: datetime, renovacion: Renovacion
+    ) -> Poliza | None:
+        """Pasa a ``DESACTIVADA`` con las mismas condiciones de ``renovar``."""
         ...
 
 
