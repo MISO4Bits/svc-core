@@ -17,6 +17,7 @@ from decimal import Decimal
 
 from app.domain import (
     MENSAJE_RECHAZO,
+    MESES_VIGENCIA,
     PENDIENTES_DE_AGENTE,
     Cliente,
     ClienteNoActivo,
@@ -476,7 +477,7 @@ class PolizaService:
         for _ in range(_INTENTOS_NUMERO):
             emitida_en = self._ahora()
             numero = generar_numero_poliza(emitida_en, self._aleatorio)
-            vigencia = Vigencia(emitida_en, sumar_meses(emitida_en, poliza.cobertura_meses))
+            vigencia = Vigencia(emitida_en, sumar_meses(emitida_en, MESES_VIGENCIA))
             try:
                 emitida = await self._polizas.emitir(
                     poliza.id, numero, emitida_en, vigencia, consumir_evidencias=consumir_evidencias
