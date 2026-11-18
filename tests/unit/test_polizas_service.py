@@ -154,7 +154,9 @@ async def test_con_todo_cumplido_la_poliza_se_emite_en_la_misma_solicitud(e):
     assert poliza.pendientes == ()
     assert poliza.emitida_en == e.reloj.ahora
     assert poliza.vigencia.desde == e.reloj.ahora
-    assert poliza.vigencia.hasta == datetime(2046, 10, 24, 12, 0, tzinfo=UTC)  # 240 meses
+    # Un año desde la emisión, aunque el crédito tenga 240 meses restantes (BITS-395).
+    assert poliza.cobertura_meses == 240
+    assert poliza.vigencia.hasta == datetime(2027, 10, 24, 12, 0, tzinfo=UTC)
     assert [c.codigo for c in poliza.coberturas] == [VIDA, HOGAR]
     assert str(poliza.prima_total_mensual) == "42368"  # 24696 + 17672
     assert {x.tipo for x in poliza.evidencias} == set(TipoEvidencia)

@@ -686,6 +686,11 @@ def validar_rango_de_edad(edad: int, plazo_restante_meses: int) -> None:
         )
 
 
+# La vigencia de la póliza es de un año desde la emisión y se renueva en el aniversario
+# (BITS-395). Es independiente del plazo restante del crédito.
+MESES_VIGENCIA = 12
+
+
 def sumar_meses(inicio: datetime, meses: int) -> datetime:
     """``inicio`` más ``meses`` calendario; el día se ajusta si el mes de llegada es más corto."""
     indice = inicio.month - 1 + meses

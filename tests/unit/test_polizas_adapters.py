@@ -275,6 +275,8 @@ def test_edades_y_plazos_fuera_de_rango(edad, plazo):
         (datetime(2026, 11, 30, tzinfo=UTC), 1, datetime(2026, 12, 30, tzinfo=UTC)),
         (datetime(2026, 12, 15, tzinfo=UTC), 1, datetime(2027, 1, 15, tzinfo=UTC)),
         (datetime(2026, 3, 31, tzinfo=UTC), 12, datetime(2027, 3, 31, tzinfo=UTC)),
+        # Emitida un 29 de febrero, vence el 28 del año siguiente (BITS-395).
+        (datetime(2028, 2, 29, tzinfo=UTC), 12, datetime(2029, 2, 28, tzinfo=UTC)),
     ],
 )
 def test_sumar_meses(inicio, meses, esperado):
