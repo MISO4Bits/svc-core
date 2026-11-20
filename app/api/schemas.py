@@ -343,6 +343,9 @@ class PolizaResumenOut(_Model):
     prima_total_mensual: float
     origen_datos: OrigenDatos
     pendientes: list[PendienteResumenOut]
+    # La propuesta de renovación (BITS-387): el tablero del socio cuenta las rechazadas antes del
+    # aniversario, que siguen EMITIDA hasta ese día.
+    renovacion: RenovacionOut | None = None
 
 
 class PaginaPolizasOut(_Model):

@@ -2149,6 +2149,14 @@ components:
           - $ref: '#/components/schemas/ClienteDeVenta'
           - type: 'null'
           description: Solo al listar con `socioId`.
+        renovacion:
+          oneOf:
+          - $ref: '#/components/schemas/Renovacion'
+          - type: 'null'
+          description: |
+            La propuesta de renovación, como en el detalle de la póliza. `null` hasta el aviso de
+            vencimiento (45 días antes del aniversario). Una póliza cuyo cliente rechazó la
+            renovación sigue `EMITIDA` con `renovacion.estado = RECHAZADA` hasta el aniversario.
     ClienteDeVenta:
       type: object
       additionalProperties: false

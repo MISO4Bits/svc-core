@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from jsonschema import Draft202012Validator
 
 from app.adapters.factory import maybe_init
 from app.adapters.memory import InMemoryClienteRepository, InMemoryPolizaRepository
 from app.api.app import create_app
-from app.domain import Cliente, EstadoPoliza, FiltroPolizas, TipoDocumento
+from app.domain import (
+    ZONA_COLOMBIA,
+    Cliente,
+    DecisionRenovacion,
+    EstadoPoliza,
+    FiltroPolizas,
+    TipoDocumento,
+)
 from tests.conftest import CLIENTE_VALIDO
 from tests.integration.test_venta_directa_api import (
     ASISTIDO,
@@ -206,3 +214,31 @@ async def test_obtener_varios_devuelve_solo_los_que_existen_y_sin_repetir(app, h
     assert list(de_sqlite) == [poliza["clienteId"]]
     assert list(de_memoria) == [cliente.id]
     assert await repo_sqlite.obtener_varios([]) == {}
+
+
+async def test_la_lista_del_socio_trae_la_renovacion_cuando_el_cliente_ya_decidio(
+    app, http, openapi_spec
+):
+    vendida = await _vendida(http, SOCIO_A)
+    antes = (await _listar(http, socioId=SOCIO_A)).json()["items"][0]
+    assert antes["renovacion"] is None
+
+    detalle = (await http.get(f"/v1/polizas/{vendida['polizaId']}")).json()
+    hasta = datetime.fromisoformat(detalle["vigencia"]["hasta"]).astimezone(ZONA_COLOMBIA)
+    corte = datetime.combine(hasta.date() - timedelta(days=45), time(12), tzinfo=ZONA_COLOMBIA)
+    await app.state.renovaciones.ejecutar(corte)
+    await app.state.renovaciones.decidir(
+        detalle["clienteId"], vendida["polizaId"], DecisionRenovacion.RECHAZAR
+    )
+
+    [fila] = (await _listar(http, socioId=SOCIO_A)).json()["items"]
+
+    assert fila["estado"] == "EMITIDA"  # sigue emitida hasta el aniversario
+    assert fila["renovacion"]["estado"] == "RECHAZADA"
+    assert fila["renovacion"]["ipc"] == 0.05
+    assert fila["renovacion"]["avisoBanco"] is None
+    esquema = {
+        "$ref": "#/components/schemas/PolizaResumen",
+        "components": openapi_spec["components"],
+    }
+    assert not list(Draft202012Validator(esquema).iter_errors(fila))

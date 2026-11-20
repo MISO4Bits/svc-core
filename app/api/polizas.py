@@ -354,6 +354,7 @@ def _cliente_de_venta(cliente: Cliente | None) -> ClienteDeVentaOut | None:
 @router.get("/polizas", response_model=PaginaPolizasOut, tags=["Pólizas (backoffice)"])
 async def listar_polizas(
     service: PolizasDep,
+    renovaciones: RenovacionesDep,
     estado: Annotated[EstadoPoliza | None, Query()] = None,
     tipo_pendiente: Annotated[TipoPendiente | None, Query(alias="tipoPendiente")] = None,
     codigo_pendiente: Annotated[CodigoPendiente | None, Query(alias="codigoPendiente")] = None,
@@ -403,6 +404,7 @@ async def listar_polizas(
                 pendientes=[
                     PendienteResumenOut(codigo=x.codigo, tipo=x.tipo) for x in p.pendientes
                 ],
+                renovacion=_renovacion_out(p, renovaciones.ipc),
             )
             for p in pagina.items
         ],
